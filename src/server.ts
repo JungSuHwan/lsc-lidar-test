@@ -4,17 +4,21 @@ import { LidarDriver, ScanData } from './LidarDriver';
 const fastify: FastifyInstance = Fastify({ logger: true });
 const lidar = new LidarDriver();
 
+// 최신 스캔 데이터를 저장할 변수
 let latestScanData: ScanData | null = null;
 
+// 라이다 데이터 수신 이벤트
 lidar.on('scan', (data: ScanData) => {
   latestScanData = data;
 });
 
+// 웹 대시보드 HTML (인코딩, 스타일, 스크립트 포함)
 const indexHtml = `
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Lidar Dashboard</title>
+    <meta charset="UTF-8">
+    <title>Lidar Smart Dashboard</title>
     <style>
         body { 
             background-color: #121212; 
@@ -26,47 +30,49 @@ const indexHtml = `
             overflow: hidden;
         }
         
-        /* 왼쪽 사이드바 (컨트롤 & 정보) */
+        /* 왼쪽 사이드바 스타일 */
         #sidebar {
-            width: 320px;
+            width: 300px;
             background-color: #1e1e1e;
             padding: 20px;
             display: flex;
             flex-direction: column;
             border-right: 1px solid #333;
-            box-shadow: 2px 0 5px rgba(0,0,0,0.5);
+            z-index: 10;
+            overflow-y: auto; /* 내용 많으면 스크롤 */
         }
 
-        h2 { margin-top: 0; font-size: 1.2rem; color: #fff; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
+        h2 { margin-top: 0; font-size: 1.1rem; color: #fff; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
         
-        /* 입력 폼 스타일 */
         .control-group { margin-bottom: 20px; background: #2c2c2c; padding: 15px; border-radius: 8px; }
-        .control-group label { display: block; margin-bottom: 5px; font-size: 0.9rem; color: #aaa; }
         .input-row { display: flex; gap: 10px; margin-bottom: 10px; }
-        input { 
-            background: #333; border: 1px solid #444; color: white; 
-            padding: 8px; border-radius: 4px; width: 100%; text-align: center; font-family: monospace;
-        }
         
+        /* 입력 필드 및 슬라이더 */
+        input[type="text"], input[type="number"] { 
+            background: #333; border: 1px solid #444; color: white; 
+            padding: 8px; border-radius: 4px; width: 100%; text-align: center;
+        }
+        input[type="range"] { width: 100%; margin: 10px 0; cursor: pointer; }
+
         /* 버튼 스타일 */
         button { 
             width: 100%; padding: 10px; border: none; border-radius: 4px; 
-            cursor: pointer; font-weight: bold; transition: 0.2s; margin-bottom: 5px;
+            cursor: pointer; font-weight: bold; margin-bottom: 5px; 
+            transition: background 0.2s;
         }
         button.primary { background: #007bff; color: white; }
         button.primary:hover { background: #0056b3; }
         button.danger { background: #dc3545; color: white; }
         button.danger:hover { background: #a71d2a; }
-        button.secondary { background: #444; color: #ddd; }
-        button.secondary:hover { background: #555; }
+        button.secondary { background: #444; color: white; }
+        button.secondary:hover { background: #666; }
+        
+        /* 데이터 테이블 */
+        .data-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        .data-table td { padding: 6px 0; border-bottom: 1px solid #333; }
+        .data-table td:last-child { text-align: right; color: #00ff00; font-family: monospace; }
 
-        /* 센서 데이터 테이블 */
-        .data-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-        .data-table td { padding: 8px 0; border-bottom: 1px solid #333; }
-        .data-table td:first-child { color: #888; }
-        .data-table td:last-child { text-align: right; color: #00ff00; font-family: monospace; font-size: 1rem; }
-
-        /* 상태 표시 */
+        /* 상태 박스 */
         #status-box { 
             text-align: center; padding: 10px; border-radius: 4px; margin-bottom: 15px; font-weight: bold;
             background: #222; border: 1px solid #333;
@@ -74,7 +80,7 @@ const indexHtml = `
         .connected { color: #28a745; border-color: #28a745 !important; }
         .disconnected { color: #dc3545; border-color: #dc3545 !important; }
 
-        /* 오른쪽 뷰어 영역 */
+        /* 메인 뷰어 영역 */
         #main-view {
             flex: 1;
             position: relative;
@@ -82,12 +88,13 @@ const indexHtml = `
             display: flex;
             justify-content: center;
             align-items: center;
+            cursor: crosshair; /* 십자 커서 */
         }
-        canvas { box-shadow: 0 0 30px rgba(0,0,0,0.5); border-radius: 50%; background: #050505; }
+        canvas { border-radius: 50%; background: #050505; box-shadow: 0 0 30px rgba(0,0,0,0.6); }
         
         #overlay-info {
             position: absolute; top: 20px; right: 20px; 
-            background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; 
+            background: rgba(0,0,0,0.6); padding: 10px; border-radius: 5px; 
             pointer-events: none; color: #aaa; font-size: 0.8rem;
         }
     </style>
@@ -100,35 +107,40 @@ const indexHtml = `
         
         <div class="control-group">
             <div class="input-row">
-                <input type="text" id="ip" value="192.168.0.10" placeholder="IP Address">
+                <input type="text" id="ip" value="192.168.0.10" placeholder="IP">
                 <input type="number" id="port" value="8000" placeholder="Port" style="width: 60px;">
             </div>
-            <button class="primary" onclick="connect()">Connect & Start</button>
+            <button class="primary" onclick="connect()">Connect</button>
             <button class="danger" onclick="disconnect()">Disconnect</button>
         </div>
 
-        <h2>Sensor Data</h2>
+        <h2>View Settings</h2>
         <div class="control-group">
-            <table class="data-table">
-                <tr><td>Scan Counter</td><td id="val-counter">-</td></tr>
-                <tr><td>Scan Freq</td><td id="val-freq">- Hz</td></tr>
-                <tr><td>Points</td><td id="val-points">-</td></tr>
-                <tr><td>Angle Start</td><td id="val-start">-</td></tr>
-                <tr><td>Angle Resol</td><td id="val-resol">-</td></tr>
-                <tr><td>Status</td><td id="val-status">Wait</td></tr>
-            </table>
+            <label>Rotation Offset: <span id="rot-val" style="color:#0ff">-90</span>°</label>
+            <input type="range" id="rot-slider" min="-180" max="180" value="-90" step="1">
+            <button class="secondary" style="font-size:0.8rem;" onclick="resetRotation()">Reset (-90°)</button>
         </div>
 
-        <h2>Controls</h2>
-        <button class="secondary" onclick="sendCommand('SetAccessLevel,0000')">Re-Login</button>
-        <button class="secondary" onclick="sendCommand('SensorStart')">Force Start</button>
+        <h2>Real-time Data</h2>
+        <div class="control-group">
+            <table class="data-table">
+                <tr><td>Scan Freq</td><td id="val-freq">- Hz</td></tr>
+                <tr><td>Total Points</td><td id="val-points">-</td></tr>
+                <tr><td>Cursor Dist</td><td id="cur-dist" style="color:#0ff">-</td></tr>
+                <tr><td>Cursor Angle</td><td id="cur-angle" style="color:#0ff">-</td></tr>
+            </table>
+        </div>
+        
+        <h2>Manual CMD</h2>
+        <button class="secondary" onclick="sendCommand('SetAccessLevel,0000')">Login (0000)</button>
+        <button class="secondary" onclick="sendCommand('SensorStart')">Start</button>
+        <button class="secondary" onclick="sendCommand('SensorStop')">Stop</button>
     </div>
 
     <div id="main-view">
         <canvas id="lidarCanvas" width="800" height="800"></canvas>
         <div id="overlay-info">
-            Mouse Wheel: Zoom In/Out<br>
-            Scale: <span id="scale-indicator">50</span> px/m
+            Mouse Wheel: Zoom | Scale: <span id="scale-indicator">50</span> px/m
         </div>
     </div>
 
@@ -137,28 +149,62 @@ const indexHtml = `
         const ctx = canvas.getContext('2d');
         const statusEl = document.getElementById('status-box');
         
-        // 데이터 표시 엘리먼트
-        const elCounter = document.getElementById('val-counter');
+        // 데이터 표시용 엘리먼트
         const elFreq = document.getElementById('val-freq');
         const elPoints = document.getElementById('val-points');
-        const elStart = document.getElementById('val-start');
-        const elResol = document.getElementById('val-resol');
-        const elStatus = document.getElementById('val-status');
+        const elCurDist = document.getElementById('cur-dist');
+        const elCurAngle = document.getElementById('cur-angle');
         const elScale = document.getElementById('scale-indicator');
+        
+        // 회전 슬라이더 엘리먼트
+        const rotSlider = document.getElementById('rot-slider');
+        const rotVal = document.getElementById('rot-val');
 
+        // 상태 변수
         let isRunning = false;
-        let scale = 50; 
+        let scale = 50; // 초기 스케일 (px/m)
         let scanData = null;
+        let rotationOffset = -90; // 초기 회전값 (-90도)
 
-        // 줌 제어
+        // --- 이벤트 리스너 ---
+
+        // 1. 회전 슬라이더 변경
+        rotSlider.addEventListener('input', (e) => {
+            rotationOffset = parseInt(e.target.value);
+            rotVal.innerText = rotationOffset;
+            if (!scanData) drawGrid();
+            else draw(scanData);
+        });
+
+        // 2. 마우스 이동 (커서 위치 추적)
+        let mouseX = 0;
+        let mouseY = 0;
+        const HIT_RADIUS = 15; // 마우스 감지 반경 (px)
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
+        });
+
+        // 3. 마우스 휠 (줌 인/아웃)
         canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
             scale += e.deltaY * -0.1;
             if (scale < 5) scale = 5;
-            if (scale > 300) scale = 300;
+            if (scale > 400) scale = 400;
             elScale.innerText = Math.round(scale);
-            if(!scanData) drawGrid(); 
+            if (!scanData) drawGrid();
         });
+
+        // --- 기능 함수 ---
+
+        function resetRotation() {
+            rotationOffset = -90;
+            rotSlider.value = -90;
+            rotVal.innerText = -90;
+            if (scanData) draw(scanData);
+        }
 
         async function connect() {
             const ip = document.getElementById('ip').value;
@@ -193,12 +239,17 @@ const indexHtml = `
             setStatus('OFFLINE', 'disconnected');
             isRunning = false;
             scanData = null;
-            resetDataDisplay();
+            
+            // UI 초기화
+            elFreq.innerText = '- Hz';
+            elPoints.innerText = '-';
+            elCurDist.innerText = '-';
+            elCurAngle.innerText = '-';
             drawGrid();
         }
-
+        
         async function sendCommand(cmd) {
-            await fetch('/command', {
+            fetch('/command', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ command: cmd })
@@ -211,14 +262,7 @@ const indexHtml = `
             statusEl.classList.add(cls);
         }
 
-        function resetDataDisplay() {
-            elCounter.innerText = '-';
-            elFreq.innerText = '- Hz';
-            elPoints.innerText = '-';
-            elStart.innerText = '-';
-            elResol.innerText = '-';
-            elStatus.innerText = 'Wait';
-        }
+        // --- 루프 및 그리기 ---
 
         async function loop() {
             if (!isRunning) return;
@@ -226,38 +270,18 @@ const indexHtml = `
                 const res = await fetch('/scan');
                 if (res.ok) {
                     const data = await res.json();
-                    if (!data.status) { 
+                    if (!data.status) { // 에러 메시지가 아니면 데이터
                         scanData = data;
-                        updateUI(data);
+                        // UI 업데이트
+                        elFreq.innerText = (data.scanFreq / 100.0).toFixed(1) + ' Hz';
+                        elPoints.innerText = data.amountOfData;
+                        
                         draw(data);
                     }
                 }
             } catch(e) {}
-            setTimeout(loop, 50); // 20 FPS
-        }
-
-        function updateUI(data) {
-            // 1. Scan Counter
-            elCounter.innerText = data.scanCounter;
-
-            // 2. Frequency (단위: 0.01Hz -> Hz)
-            // autolidar.cpp: msg->scan_time = (1.0 / (lsc->scan_mea.scan_freq / 100.0));
-            const freqHz = (data.scanFreq / 100.0).toFixed(1);
-            elFreq.innerText = freqHz + ' Hz';
-
-            // 3. Points
-            elPoints.innerText = data.amountOfData;
-
-            // 4. Angles (단위: 0.0001도 -> 도)
-            // autolidar.cpp: lsc->scan_mea.angle_begin / 10000.0
-            const startDeg = (data.angleBegin / 10000.0).toFixed(1);
-            const resolDeg = (data.angleResol / 10000.0).toFixed(2);
-            
-            elStart.innerText = startDeg + '°';
-            elResol.innerText = resolDeg + '°';
-            
-            elStatus.innerText = 'Receiving';
-            elStatus.style.color = '#00ff00';
+            // 30~50ms 간격으로 재호출
+            requestAnimationFrame(loop);
         }
 
         function draw(data) {
@@ -266,38 +290,80 @@ const indexHtml = `
             const cx = w / 2;
             const cy = h / 2;
 
-            // 배경 클리어 (잔상 효과)
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+            // 1. 배경 클리어 (잔상 효과)
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
             ctx.fillRect(0, 0, w, h);
 
-            // 그리드 그리기
+            // 2. 그리드 그리기
             drawGridOnly(cx, cy);
 
-            // 데이터 그리기
-            ctx.fillStyle = '#00ff00';
+            // 3. 점 데이터 그리기
+            ctx.fillStyle = '#00ff00'; // 기본 점 색상
             
-            const startAngle = data.angleBegin / 10000.0; 
+            // 각도 단위 변환 (0.0001도 -> 도)
+            const startAngle = data.angleBegin / 10000.0;
             const stepAngle = data.angleResol / 10000.0;
 
-            for (let i = 0; i < data.ranges.length; i++) {
-                const dist = data.ranges[i]; 
-                if (dist < 0.05) continue; 
+            let closestDist = Infinity;
+            let closestPoint = null;
 
-                // Lidar 0도(정면) -> 화면 -90도(위쪽) 보정
+            for (let i = 0; i < data.ranges.length; i++) {
+                const dist = data.ranges[i];
+                if (dist < 0.05) continue; // 노이즈 필터링
+
                 const currentAngleDeg = startAngle + (i * stepAngle);
-                const rad = (currentAngleDeg - 90) * (Math.PI / 180);
+                
+                // [핵심] 좌표 변환 로직
+                // 1. (-currentAngleDeg): Lidar의 반시계 방향을 Canvas 시계 방향에 맞게 반전 (좌우 반전 해결)
+                // 2. (+ rotationOffset): 회전 보정 (기본 -90도) 적용
+                const rad = ((-currentAngleDeg) + rotationOffset) * (Math.PI / 180);
 
                 const x = cx + Math.cos(rad) * dist * scale;
                 const y = cy + Math.sin(rad) * dist * scale;
 
-                ctx.fillRect(x, y, 3, 3);
-            }
-        }
+                // 점 찍기
+                ctx.fillRect(x, y, 2, 2);
 
-        function drawGrid() {
-            ctx.fillStyle = '#050505';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            drawGridOnly(canvas.width/2, canvas.height/2);
+                // 마우스와 가장 가까운 점 찾기
+                const dx = x - mouseX;
+                const dy = y - mouseY;
+                const d = Math.sqrt(dx*dx + dy*dy);
+
+                if (d < HIT_RADIUS && d < closestDist) {
+                    closestDist = d;
+                    closestPoint = { x, y, dist, angle: currentAngleDeg };
+                }
+            }
+
+            // 4. 하이라이트 및 툴팁 그리기
+            if (closestPoint) {
+                // 하이라이트 원
+                ctx.beginPath();
+                ctx.arc(closestPoint.x, closestPoint.y, 6, 0, Math.PI * 2);
+                ctx.strokeStyle = '#00ffff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // 텍스트 정보
+                ctx.font = 'bold 14px monospace';
+                const infoText = \`\${closestPoint.dist.toFixed(3)}m / \${closestPoint.angle.toFixed(1)}°\`;
+                const textWidth = ctx.measureText(infoText).width;
+                
+                // 텍스트 배경 박스
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                ctx.fillRect(closestPoint.x + 10, closestPoint.y - 35, textWidth + 10, 24);
+                
+                // 텍스트 그리기
+                ctx.fillStyle = '#00ffff';
+                ctx.fillText(infoText, closestPoint.x + 15, closestPoint.y - 19);
+
+                // 사이드바 정보 업데이트
+                elCurDist.innerText = closestPoint.dist.toFixed(3) + ' m';
+                elCurAngle.innerText = closestPoint.angle.toFixed(1) + ' °';
+            } else {
+                elCurDist.innerText = '-';
+                elCurAngle.innerText = '-';
+            }
         }
 
         function drawGridOnly(cx, cy) {
@@ -307,13 +373,13 @@ const indexHtml = `
             ctx.textAlign = 'center';
             ctx.font = '12px sans-serif';
 
-            // 동심원 (1m 단위)
             const maxDist = (canvas.width / 2) / scale; 
             for (let r = 1; r < maxDist; r++) {
+                // 원형 그리드
                 ctx.beginPath();
                 ctx.arc(cx, cy, r * scale, 0, Math.PI * 2);
                 ctx.stroke();
-                // 텍스트는 십자선 위쪽에 표시
+                // 거리 텍스트
                 ctx.fillText(r + 'm', cx + 5, cy - (r * scale) - 2);
             }
 
@@ -323,30 +389,34 @@ const indexHtml = `
             ctx.moveTo(cx, 0); ctx.lineTo(cx, canvas.height);
             ctx.stroke();
             
-            // 방향 텍스트
+            // 전방 표시
             ctx.fillStyle = '#ffcc00';
-            ctx.fillText("FRONT", cx, 30);
+            ctx.fillText("FRONT (12h)", cx, 30);
         }
-
-        // 초기 화면 그리기
-        drawGrid();
+        
+        // 초기 그리드 표시
+        drawGridOnly(canvas.width/2, canvas.height/2);
 
     </script>
 </body>
 </html>
 `;
 
-// --- API 라우트 ---
+// --- API 라우트 정의 ---
 
+// 1. 웹 페이지 제공
 fastify.get('/', async (req, reply) => reply.type('text/html').send(indexHtml));
 
+// 2. 연결 요청
 fastify.post<{ Body: { ip: string; port?: number } }>('/connect', async (request, reply) => {
   const { ip, port } = request.body;
   try {
     if (!lidar.isConnected()) {
         await lidar.connect(ip, port || 8000);
     }
-    // 자동 초기화: 로그인 -> 센서 시작
+    
+    // [자동 실행 시퀀스]
+    // 연결 후 0.2초 뒤 로그인, 0.6초 뒤 시작 명령 전송
     setTimeout(() => lidar.sendCommand('SetAccessLevel,0000'), 200);
     setTimeout(() => lidar.sendCommand('SensorStart'), 600);
 
@@ -356,17 +426,20 @@ fastify.post<{ Body: { ip: string; port?: number } }>('/connect', async (request
   }
 });
 
+// 3. 연결 해제
 fastify.post('/disconnect', async (request, reply) => {
   lidar.disconnect();
   return { status: 'disconnected' };
 });
 
+// 4. 스캔 데이터 요청
 fastify.get('/scan', async (request, reply) => {
   if (!lidar.isConnected()) return { status: 'error', message: 'Not connected' };
   if (!latestScanData) return { status: 'waiting_for_data' };
   return latestScanData;
 });
 
+// 5. 수동 커맨드 전송
 fastify.post<{ Body: { command: string } }>('/command', async (request, reply) => {
   try {
     lidar.sendCommand(request.body.command);
@@ -376,11 +449,13 @@ fastify.post<{ Body: { command: string } }>('/command', async (request, reply) =
   }
 });
 
+// --- 서버 시작 ---
 const start = async () => {
   try {
     await fastify.listen({ port: 3000, host: '0.0.0.0' });
     console.log('Server running at http://localhost:3000');
   } catch (err) {
+    fastify.log.error(err);
     process.exit(1);
   }
 };
