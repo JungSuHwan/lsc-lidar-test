@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>라이다 데이터 모니터</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .input-group {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        input[type="text"], input[type="number"] {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .btn-connect {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .btn-disconnect {
+            background-color: #f44336;
+            color: white;
+        }
+        .btn-command {
+            background-color: #2196F3;
+            color: white;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+        .status.connected {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .panel {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+        }
+        .info-item {
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            border-left: 4px solid #007bff;
+        }
+        .info-label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        .info-value {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+        }
+        .chart-container {
+            position: relative;
+            height: 400px;
+        }
+        .log {
+            background: #1e1e1e;
+            color: #fff;
+            padding: 10px;
+            border-radius: 4px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 라이다 데이터 모니터</h1>
+            <div class="controls">
+                <div class="input-group">
+                    <input type="text" id="ip" placeholder="IP 주소" value="192.168.0.10">
+                    <input type="number" id="port" placeholder="포트" value="8000">
+                    <button class="btn-connect" onclick="connect()">연결</button>
+                    <button class="btn-disconnect" onclick="disconnect()">연결 해제</button>
+                </div>
+                <div class="input-group">
+                    <input type="text" id="command" placeholder="명령어" value="sMN LMCstartmeas">
+                    <button class="btn-command" onclick="sendCommand()">전송</button>
+                </div>
+            </div>
+            <div id="status" class="status disconnected">연결 안됨</div>
+        </div>
+
+        <div class="dashboard">
+            <div class="panel">
+                <h3>📊 스캔 정보</h3>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">스캔 카운터</div>
+                        <div class="info-value" id="scanCounter">-</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">스캔 주파수</div>
+                        <div class="info-value" id="scanFreq">-</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">측정 주파수</div>
+                        <div class="info-value" id="measFreq">-</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">시작 각도</div>
+                        <div class="info-value" id="angleBegin">-</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">각도 해상도</div>
+                        <div class="info-value" id="angleResol">-</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">데이터 개수</div>
+                        <div class="info-value" id="amountOfData">-</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h3>📈 거리 데이터</h3>
+                <div class="chart-container">
+                    <canvas id="rangeChart"></canvas>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h3>📡 신호 강도</h3>
+                <div class="chart-container">
+                    <canvas id="rssiChart"></canvas>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h3>📝 로그</h3>
+                <div id="log" class="log"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let rangeChart, rssiChart;
+        let ws;
+
+        function initCharts() {
+            // 거리 차트
+            const rangeCtx = document.getElementById('rangeChart').getContext('2d');
+            rangeChart = new Chart(rangeCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '거리 (m)',
+                        data: [],
+                        borderColor: 'rgb(75, 192, 192)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: '거리 (m)'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: '각도'
+                            }
+                        }
+                    }
+                }
+            });
+
+            // 신호 강도 차트
+            const rssiCtx = document.getElementById('rssiChart').getContext('2d');
+            rssiChart = new Chart(rssiCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '신호 강도',
+                        data: [],
+                        borderColor: 'rgb(255, 99, 132)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'RSSI'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: '각도'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function connect() {
+            const ip = document.getElementById('ip').value;
+            const port = document.getElementById('port').value;
+            
+            fetch('/connect', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ ip, port: parseInt(port) })
+            })
+            .then(response => response.json())
+            .then(data => {
+                updateStatus(data.status === 'connected');
+                addLog(`연결 시도: ${ip}:${port}`);
+                if (data.status === 'connected') {
+                    addLog('✅ 연결 성공');
+                    initWebSocket();
+                } else {
+                    addLog(`❌ 연결 실패: ${data.message || data.status}`);
+                }
+            })
+            .catch(error => {
+                addLog(`❌ 연결 에러: ${error.message}`);
+            });
+        }
+
+        function disconnect() {
+            fetch('/disconnect', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                updateStatus(false);
+                addLog('🔌 연결 해제');
+                if (ws) {
+                    ws.close();
+                    ws = null;
+                }
+            });
+        }
+
+        function sendCommand() {
+            const command = document.getElementById('command').value;
+            fetch('/command', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ command })
+            })
+            .then(response => response.json())
+            .then(data => {
+                addLog(`📤 명령어 전송: ${command}`);
+                if (data.status === 'error') {
+                    addLog(`❌ 명령어 에러: ${data.message}`);
+                }
+            });
+        }
+
+        function initWebSocket() {
+            if (ws) {
+                ws.close();
+            }
+            
+            ws = new WebSocket(`ws://${window.location.host}`);
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'scan') {
+                    updateScanData(data.data);
+                }
+            };
+            
+            ws.onopen = () => {
+                addLog('🔗 WebSocket 연결됨');
+            };
+            
+            ws.onclose = () => {
+                addLog('🔌 WebSocket 연결 종료');
+            };
+        }
+
+        function updateScanData(data) {
+            // 정보 업데이트
+            document.getElementById('scanCounter').textContent = data.scanCounter;
+            document.getElementById('scanFreq').textContent = data.scanFreq + ' Hz';
+            document.getElementById('measFreq').textContent = data.measFreq + ' Hz';
+            document.getElementById('angleBegin').textContent = data.angleBegin + '°';
+            document.getElementById('angleResol').textContent = data.angleResol + '°';
+            document.getElementById('amountOfData').textContent = data.amountOfData;
+
+            // 차트 데이터 업데이트
+            const angles = [];
+            for (let i = 0; i < data.amountOfData; i++) {
+                angles.push((data.angleBegin + i * data.angleResol).toFixed(1) + '°');
+            }
+
+            rangeChart.data.labels = angles;
+            rangeChart.data.datasets[0].data = data.ranges;
+            rangeChart.update();
+
+            rssiChart.data.labels = angles;
+            rssiChart.data.datasets[0].data = data.rssi;
+            rssiChart.update();
+
+            addLog(`📊 스캔 데이터 수신: ${data.amountOfData}개 포인트`);
+        }
+
+        function updateStatus(connected) {
+            const statusEl = document.getElementById('status');
+            if (connected) {
+                statusEl.textContent = '연결됨';
+                statusEl.className = 'status connected';
+            } else {
+                statusEl.textContent = '연결 안됨';
+                statusEl.className = 'status disconnected';
+            }
+        }
+
+        function addLog(message) {
+            const logEl = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logEl.innerHTML += `[${timestamp}] ${message}\n`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        // 초기화
+        initCharts();
+        addLog('🚀 라이다 모니터 시작됨');
+    </script>
+</body>
+</html>
