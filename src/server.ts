@@ -1,6 +1,6 @@
 import Fastify, { FastifyInstance } from 'fastify';
 import { LidarDriver, ScanData } from './LidarDriver';
-//
+
 const fastify: FastifyInstance = Fastify({ logger: true });
 const lidar = new LidarDriver();
 
