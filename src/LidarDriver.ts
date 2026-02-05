@@ -64,12 +64,19 @@ export class LidarDriver extends EventEmitter {
   public sendCommand(rawCmd: string) {
     if (!this.connected) return;
 
-    // 1. 커맨드 타입 결정 (C++ 코드 매핑)
-    let type = 'sMC'; // 기본값 (Method Command)
-    if (rawCmd.includes('SensorScanInfo') || rawCmd.includes('ScanDataConfig')) {
+    // 1. 커맨드 타입 결정 (C++ 코드 매핑 및 버그 수정)
+    let type = 'sMC'; // 기본값 (Method Command - ex: SensorStart)
+
+    if (rawCmd.includes('SensorScanInfo')) {
         type = 'sRC'; // Read Command
-    } else if (rawCmd.includes('LSScanDataConfig')) {
-        type = 'sWC'; // Write Command
+    } 
+    // LSScanDataConfig 처리: 콤마(,)가 있으면 설정 쓰기(sWC), 없으면 설정 읽기(sRC)
+    else if (rawCmd.startsWith('LSScanDataConfig')) {
+        if (rawCmd.includes(',')) {
+            type = 'sWC'; // Write Command (인자가 포함된 경우)
+        } else {
+            type = 'sRC'; // Read Command (조회만 하는 경우)
+        }
     }
 
     // 2. 페이로드 구성

@@ -116,9 +116,9 @@ const indexHtml = `
 
         <h2>View Settings</h2>
         <div class="control-group">
-            <label>Rotation Offset: <span id="rot-val" style="color:#0ff">-90</span>°</label>
-            <input type="range" id="rot-slider" min="-180" max="180" value="-90" step="1">
-            <button class="secondary" style="font-size:0.8rem;" onclick="resetRotation()">Reset (-90°)</button>
+            <label>Rotation Offset: <span id="rot-val" style="color:#0ff">0</span>°</label>
+            <input type="range" id="rot-slider" min="-180" max="180" value="0" step="1">
+            <button class="secondary" style="font-size:0.8rem;" onclick="resetRotation()">Reset (0°)</button>
         </div>
 
         <h2>Real-time Data</h2>
@@ -164,7 +164,7 @@ const indexHtml = `
         let isRunning = false;
         let scale = 50; // 초기 스케일 (px/m)
         let scanData = null;
-        let rotationOffset = -90; // 초기 회전값 (-90도)
+        let rotationOffset = 0; // 초기 회전값 (0도)
 
         // --- 이벤트 리스너 ---
 
@@ -200,9 +200,9 @@ const indexHtml = `
         // --- 기능 함수 ---
 
         function resetRotation() {
-            rotationOffset = -90;
-            rotSlider.value = -90;
-            rotVal.innerText = -90;
+            rotationOffset = 0;
+            rotSlider.value = 0;
+            rotVal.innerText = 0;
             if (scanData) draw(scanData);
         }
 
@@ -402,6 +402,55 @@ const indexHtml = `
 </html>
 `;
 
+// 16진수 변환 헬퍼 함수
+// C++: (int) std::round((angle - offset) * 10000) -> Hex
+function toHex(num: number): string {
+    // 32비트 정수형으로 강제 변환 후 16진수화 (음수 처리 포함)
+    return (num >>> 0).toString(16).toUpperCase();
+}
+
+// [C++ 드라이버 Logic 이식] 초기화 시퀀스 실행 함수
+async function runHandshake() {
+    console.log('Starting Handshake Sequence...');
+    
+    const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+    // 1. FirstConnectDummySend 대기 (C++: get_response)
+    // 실제로는 연결 후 센서가 안정화될 때까지 잠시 대기
+    await delay(500);
+
+    // 2. 센서 정보 획득 (C++: SensorScanInfo)
+    lidar.sendCommand('SensorScanInfo');
+    await delay(200);
+
+    // 3. 로그인 (C++: SetAccessLevel)
+    lidar.sendCommand('SetAccessLevel,0000');
+    await delay(200);
+
+    // 4. 스캔 설정 읽기 (C++: LSScanDataConfig - Read)
+    lidar.sendCommand('LSScanDataConfig');
+    await delay(200);
+
+    // 5. 스캔 설정 쓰기 (C++: LSScanDataConfig - Write)
+    // 설정값: Angle(-45~225), RSSI(On), Interval(67=0x43), Fieldset(1)
+    const angleMin = -45.0;
+    const angleMax = 225.0;
+    const angleOffset = 0.0;
+
+    const start = Math.round((angleMin - angleOffset) * 10000);
+    const end = Math.round((angleMax - angleOffset) * 10000);
+    
+    // Command: sWC,LSScanDataConfig,Start,End,Rssi,Interval,Fieldset
+    const configCmd = `LSScanDataConfig,${toHex(start)},${toHex(end)},1,43,1`;
+    console.log(`Configuring Scan: ${configCmd} (-45deg ~ 225deg)`);
+    lidar.sendCommand(configCmd);
+    await delay(200);
+
+    // 6. 스캔 시작 (C++: SensorStart)
+    lidar.sendCommand('SensorStart');
+    console.log('Handshake Completed. Scan Started.');
+}
+
 // --- API 라우트 정의 ---
 
 // 1. 웹 페이지 제공
@@ -413,13 +462,16 @@ fastify.post<{ Body: { ip: string; port?: number } }>('/connect', async (request
   try {
     if (!lidar.isConnected()) {
         await lidar.connect(ip, port || 8000);
+        
+        // 연결 성공 시 초기화 시퀀스(Handshake) 실행
+        // 비동기로 실행하여 API 응답은 즉시 반환
+        runHandshake().catch(err => {
+            console.error('Handshake failed:', err);
+        });
+    } else {
+        console.log('Already connected.');
     }
     
-    // [자동 실행 시퀀스]
-    // 연결 후 0.2초 뒤 로그인, 0.6초 뒤 시작 명령 전송
-    setTimeout(() => lidar.sendCommand('SetAccessLevel,0000'), 200);
-    setTimeout(() => lidar.sendCommand('SensorStart'), 600);
-
     return { status: 'connected', ip, port: port || 8000 };
   } catch (err: any) {
     return { status: 'error', message: err.message };
@@ -428,7 +480,12 @@ fastify.post<{ Body: { ip: string; port?: number } }>('/connect', async (request
 
 // 3. 연결 해제
 fastify.post('/disconnect', async (request, reply) => {
-  lidar.disconnect();
+  if (lidar.isConnected()) {
+      lidar.sendCommand('SensorStop');
+      setTimeout(() => lidar.disconnect(), 100);
+  } else {
+      lidar.disconnect();
+  }
   return { status: 'disconnected' };
 });
 
@@ -461,5 +518,3 @@ const start = async () => {
 };
 
 start();
-
-//
