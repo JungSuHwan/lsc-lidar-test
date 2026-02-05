@@ -409,30 +409,56 @@ function toHex(num: number): string {
     return (num >>> 0).toString(16).toUpperCase();
 }
 
-// [C++ 드라이버 Logic 이식] 초기화 시퀀스 실행 함수
+// 초기화 모드 설정 (true: 전체 모드, false: 최소 모드)
+const USE_FULL_INITIALIZATION = false;
+
+// 초기화 시퀀스 (모드에 따라 선택 실행)
 async function runHandshake() {
-    console.log('Starting Handshake Sequence...');
-    
+    if (USE_FULL_INITIALIZATION) {
+        console.log('Starting Full Initialization Sequence...');
+        await runFullHandshake();
+    } else {
+        console.log('Starting Minimal Initialization...');
+        await runMinimalHandshake();
+    }
+}
+
+// 최소 모드: 연결 대기 → 로그인 → 스캔 시작
+async function runMinimalHandshake() {
     const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-    // 1. FirstConnectDummySend 대기 (C++: get_response)
-    // 실제로는 연결 후 센서가 안정화될 때까지 잠시 대기
+    // 1. 연결 안정화 대기
     await delay(500);
 
-    // 2. 센서 정보 획득 (C++: SensorScanInfo)
-    lidar.sendCommand('SensorScanInfo');
-    await delay(200);
-
-    // 3. 로그인 (C++: SetAccessLevel)
+    // 2. 로그인
     lidar.sendCommand('SetAccessLevel,0000');
     await delay(200);
 
-    // 4. 스캔 설정 읽기 (C++: LSScanDataConfig - Read)
+    // 3. 스캔 시작
+    lidar.sendCommand('SensorStart');
+    console.log('Minimal Initialization Completed. Scan Started.');
+}
+
+// 전체 모드: 연결 대기 → 센서 정보 → 로그인 → 설정 읽기 → 설정 쓰기 → 스캔 시작
+async function runFullHandshake() {
+    const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+    // 1. FirstConnectDummySend 대기
+    await delay(500);
+
+    // 2. 센서 정보 획득
+    lidar.sendCommand('SensorScanInfo');
+    await delay(200);
+
+    // 3. 로그인
+    lidar.sendCommand('SetAccessLevel,0000');
+    await delay(200);
+
+    // 4. 스캔 설정 읽기
     lidar.sendCommand('LSScanDataConfig');
     await delay(200);
 
-    // 5. 스캔 설정 쓰기 (C++: LSScanDataConfig - Write)
-    // 설정값: Angle(-45~225), RSSI(On), Interval(67=0x43), Fieldset(1)
+    // 5. 스캔 설정 쓰기
     const angleMin = -45.0;
     const angleMax = 225.0;
     const angleOffset = 0.0;
@@ -440,15 +466,14 @@ async function runHandshake() {
     const start = Math.round((angleMin - angleOffset) * 10000);
     const end = Math.round((angleMax - angleOffset) * 10000);
     
-    // Command: sWC,LSScanDataConfig,Start,End,Rssi,Interval,Fieldset
     const configCmd = `LSScanDataConfig,${toHex(start)},${toHex(end)},1,43,1`;
     console.log(`Configuring Scan: ${configCmd} (-45deg ~ 225deg)`);
     lidar.sendCommand(configCmd);
     await delay(200);
 
-    // 6. 스캔 시작 (C++: SensorStart)
+    // 6. 스캔 시작
     lidar.sendCommand('SensorStart');
-    console.log('Handshake Completed. Scan Started.');
+    console.log('Full Initialization Completed. Scan Started.');
 }
 
 // --- API 라우트 정의 ---
