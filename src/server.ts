@@ -9,537 +9,294 @@ let latestScanData: ScanData | null = null;
 
 // 라이다 데이터 수신 이벤트
 lidar.on('scan', (data: ScanData) => {
-  latestScanData = data;
+    latestScanData = data;
 });
 
-// 웹 대시보드 HTML (인코딩, 스타일, 스크립트 포함)
+// 공통 지연 함수 (ms)
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// 16진수 변환 헬퍼 함수
+function toHex(num: number): string {
+    return (num >>> 0).toString(16).toUpperCase();
+}
+
+// 웹 대시보드 HTML
 const indexHtml = `
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Lidar Smart Dashboard</title>
+    <title>LSC Lidar Controller</title>
     <style>
-        body { 
-            background-color: #121212; 
-            color: #e0e0e0; 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            margin: 0; 
-            display: flex; 
-            height: 100vh; 
-            overflow: hidden;
-        }
-        
-        /* 왼쪽 사이드바 스타일 */
-        #sidebar {
-            width: 300px;
-            background-color: #1e1e1e;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            border-right: 1px solid #333;
-            z-index: 10;
-            overflow-y: auto; /* 내용 많으면 스크롤 */
-        }
-
-        h2 { margin-top: 0; font-size: 1.1rem; color: #fff; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
-        
-        .control-group { margin-bottom: 20px; background: #2c2c2c; padding: 15px; border-radius: 8px; }
-        .input-row { display: flex; gap: 10px; margin-bottom: 10px; }
-        
-        /* 입력 필드 및 슬라이더 */
-        input[type="text"], input[type="number"] { 
-            background: #333; border: 1px solid #444; color: white; 
-            padding: 8px; border-radius: 4px; width: 100%; text-align: center;
-        }
-        input[type="range"] { width: 100%; margin: 10px 0; cursor: pointer; }
-
-        /* 버튼 스타일 */
-        button { 
-            width: 100%; padding: 10px; border: none; border-radius: 4px; 
-            cursor: pointer; font-weight: bold; margin-bottom: 5px; 
-            transition: background 0.2s;
-        }
-        button.primary { background: #007bff; color: white; }
-        button.primary:hover { background: #0056b3; }
-        button.danger { background: #dc3545; color: white; }
-        button.danger:hover { background: #a71d2a; }
-        button.secondary { background: #444; color: white; }
-        button.secondary:hover { background: #666; }
-        
-        /* 데이터 테이블 */
-        .data-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-        .data-table td { padding: 6px 0; border-bottom: 1px solid #333; }
-        .data-table td:last-child { text-align: right; color: #00ff00; font-family: monospace; }
-
-        /* 상태 박스 */
-        #status-box { 
-            text-align: center; padding: 10px; border-radius: 4px; margin-bottom: 15px; font-weight: bold;
-            background: #222; border: 1px solid #333;
-        }
+        body { background-color: #121212; color: #e0e0e0; font-family: sans-serif; margin: 0; display: flex; height: 100vh; overflow: hidden; }
+        #sidebar { width: 320px; background-color: #1e1e1e; padding: 20px; display: flex; flex-direction: column; border-right: 1px solid #333; overflow-y: auto; }
+        h2 { border-bottom: 2px solid #007bff; padding-bottom: 10px; font-size: 1.1rem; }
+        .control-group { background: #2c2c2c; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+        .input-row { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; }
+        input[type="text"], input[type="number"] { background: #333; border: 1px solid #444; color: white; padding: 8px; border-radius: 4px; width: 100%; text-align: center; }
+        button { width: 100%; padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; margin-bottom: 5px; color: white; transition: 0.2s; }
+        button.primary { background: #007bff; } button.primary:hover { background: #0056b3; }
+        button.danger { background: #dc3545; } button.danger:hover { background: #a71d2a; }
+        button.secondary { background: #444; } button.secondary:hover { background: #666; }
+        #status-box { text-align: center; padding: 10px; background: #222; border: 1px solid #333; margin-bottom: 15px; font-weight: bold; border-radius: 4px; }
         .connected { color: #28a745; border-color: #28a745 !important; }
         .disconnected { color: #dc3545; border-color: #dc3545 !important; }
-
-        /* 메인 뷰어 영역 */
-        #main-view {
-            flex: 1;
-            position: relative;
-            background: #000;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            cursor: crosshair; /* 십자 커서 */
-        }
-        canvas { border-radius: 50%; background: #050505; box-shadow: 0 0 30px rgba(0,0,0,0.6); }
-        
-        #overlay-info {
-            position: absolute; top: 20px; right: 20px; 
-            background: rgba(0,0,0,0.6); padding: 10px; border-radius: 5px; 
-            pointer-events: none; color: #aaa; font-size: 0.8rem;
-        }
+        #main-view { flex: 1; position: relative; background: #000; display: flex; justify-content: center; align-items: center; }
+        canvas { background: #050505; border-radius: 50%; box-shadow: 0 0 30px rgba(0,0,0,0.6); }
     </style>
 </head>
 <body>
-
     <div id="sidebar">
         <h2>Connection</h2>
         <div id="status-box" class="disconnected">OFFLINE</div>
-        
         <div class="control-group">
-            <div class="input-row">
-                <input type="text" id="ip" value="192.168.0.10" placeholder="IP">
-                <input type="number" id="port" value="8000" placeholder="Port" style="width: 60px;">
-            </div>
-            <button class="primary" onclick="connect()">Connect</button>
+            <div class="input-row"><input type="text" id="ip" value="192.168.0.10" placeholder="IP"><input type="number" id="port" value="8000" style="width: 60px;"></div>
+            <button class="primary" onclick="connect()">Connect & Sync</button>
             <button class="danger" onclick="disconnect()">Disconnect</button>
         </div>
-
-        <h2>View Settings</h2>
+        <h2>Scan Configuration</h2>
         <div class="control-group">
-            <label>Rotation Offset: <span id="rot-val" style="color:#0ff">0</span>°</label>
-            <input type="range" id="rot-slider" min="-180" max="180" value="0" step="1">
-            <button class="secondary" style="font-size:0.8rem;" onclick="resetRotation()">Reset (0°)</button>
+            <div class="input-row"><label>Min(°)</label><input type="number" id="scan-min" value="-45" step="1"></div>
+            <div class="input-row"><label>Max(°)</label><input type="number" id="scan-max" value="225" step="1"></div>
+            <button class="primary" onclick="applyScanConfig()">Apply Config</button>
         </div>
-
-        <h2>Real-time Data</h2>
-        <div class="control-group">
-            <table class="data-table">
-                <tr><td>Scan Freq</td><td id="val-freq">- Hz</td></tr>
-                <tr><td>Total Points</td><td id="val-points">-</td></tr>
-                <tr><td>Cursor Dist</td><td id="cur-dist" style="color:#0ff">-</td></tr>
-                <tr><td>Cursor Angle</td><td id="cur-angle" style="color:#0ff">-</td></tr>
-            </table>
-        </div>
-        
-        <h2>Manual CMD</h2>
-        <button class="secondary" onclick="sendCommand('SetAccessLevel,0000')">Login (0000)</button>
-        <button class="secondary" onclick="sendCommand('SensorStart')">Start</button>
-        <button class="secondary" onclick="sendCommand('SensorStop')">Stop</button>
-    </div>
-
-    <div id="main-view">
-        <canvas id="lidarCanvas" width="800" height="800"></canvas>
-        <div id="overlay-info">
-            Mouse Wheel: Zoom | Scale: <span id="scale-indicator">50</span> px/m
+        <h2>Data Info</h2>
+        <div class="control-group" style="font-size: 0.9rem;">
+            <div>Freq: <span id="val-freq" style="color:#0f0">-</span> Hz</div>
+            <div>Points: <span id="val-points" style="color:#0f0">-</span></div>
         </div>
     </div>
-
+    <div id="main-view"><canvas id="lidarCanvas" width="800" height="800"></canvas></div>
     <script>
         const canvas = document.getElementById('lidarCanvas');
         const ctx = canvas.getContext('2d');
-        const statusEl = document.getElementById('status-box');
-        
-        // 데이터 표시용 엘리먼트
-        const elFreq = document.getElementById('val-freq');
-        const elPoints = document.getElementById('val-points');
-        const elCurDist = document.getElementById('cur-dist');
-        const elCurAngle = document.getElementById('cur-angle');
-        const elScale = document.getElementById('scale-indicator');
-        
-        // 회전 슬라이더 엘리먼트
-        const rotSlider = document.getElementById('rot-slider');
-        const rotVal = document.getElementById('rot-val');
-
-        // 상태 변수
         let isRunning = false;
-        let scale = 50; // 초기 스케일 (px/m)
         let scanData = null;
-        let rotationOffset = 0; // 초기 회전값 (0도)
+        let scale = 50; 
 
-        // --- 이벤트 리스너 ---
-
-        // 1. 회전 슬라이더 변경
-        rotSlider.addEventListener('input', (e) => {
-            rotationOffset = parseInt(e.target.value);
-            rotVal.innerText = rotationOffset;
-            if (!scanData) drawGrid();
-            else draw(scanData);
-        });
-
-        // 2. 마우스 이동 (커서 위치 추적)
-        let mouseX = 0;
-        let mouseY = 0;
-        const HIT_RADIUS = 15; // 마우스 감지 반경 (px)
-
-        canvas.addEventListener('mousemove', (e) => {
-            const rect = canvas.getBoundingClientRect();
-            mouseX = e.clientX - rect.left;
-            mouseY = e.clientY - rect.top;
-        });
-
-        // 3. 마우스 휠 (줌 인/아웃)
+        // Canvas Scale Zoom
         canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
             scale += e.deltaY * -0.1;
-            if (scale < 5) scale = 5;
-            if (scale > 400) scale = 400;
-            elScale.innerText = Math.round(scale);
-            if (!scanData) drawGrid();
+            if(scale < 5) scale = 5;
+            if(scale > 400) scale = 400;
+            if(!scanData) drawGrid();
         });
-
-        // --- 기능 함수 ---
-
-        function resetRotation() {
-            rotationOffset = 0;
-            rotSlider.value = 0;
-            rotVal.innerText = 0;
-            if (scanData) draw(scanData);
-        }
 
         async function connect() {
             const ip = document.getElementById('ip').value;
             const port = parseInt(document.getElementById('port').value);
-            
             setStatus('Connecting...', 'disconnected');
-            
             try {
                 const res = await fetch('/connect', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ ip, port })
                 });
                 const data = await res.json();
-                
-                if (data.status === 'connected' || data.status === 'already_connected') {
+                if (data.status === 'connected') {
                     setStatus('CONNECTED', 'connected');
                     isRunning = true;
                     loop();
                 } else {
-                    alert('Connection Failed: ' + data.message);
+                    alert('Failed: ' + data.message);
                     setStatus('OFFLINE', 'disconnected');
                 }
-            } catch (e) {
-                alert('Error: ' + e.message);
-                setStatus('ERROR', 'disconnected');
-            }
+            } catch (e) { alert(e.message); }
         }
 
         async function disconnect() {
             await fetch('/disconnect', { method: 'POST' });
             setStatus('OFFLINE', 'disconnected');
             isRunning = false;
-            scanData = null;
-            
-            // UI 초기화
-            elFreq.innerText = '- Hz';
-            elPoints.innerText = '-';
-            elCurDist.innerText = '-';
-            elCurAngle.innerText = '-';
-            drawGrid();
         }
-        
-        async function sendCommand(cmd) {
-            fetch('/command', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ command: cmd })
-            });
+
+        async function applyScanConfig() {
+            const min = parseFloat(document.getElementById('scan-min').value);
+            const max = parseFloat(document.getElementById('scan-max').value);
+            setStatus('Configuring...', 'disconnected');
+            try {
+                const res = await fetch('/config/scan', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ min, max })
+                });
+                const data = await res.json();
+                if(data.status === 'success') {
+                    alert('Config Applied!');
+                    setStatus('CONNECTED', 'connected');
+                } else {
+                    alert('Error: ' + data.message);
+                    setStatus('CONNECTED', 'connected');
+                }
+            } catch(e) { alert(e.message); }
         }
 
         function setStatus(text, cls) {
-            statusEl.textContent = text;
-            statusEl.className = '';
-            statusEl.classList.add(cls);
+            const el = document.getElementById('status-box');
+            el.textContent = text; el.className = cls;
         }
 
-        // --- 루프 및 그리기 ---
-
         async function loop() {
-            if (!isRunning) return;
+            if(!isRunning) return;
             try {
                 const res = await fetch('/scan');
-                if (res.ok) {
+                if(res.ok) {
                     const data = await res.json();
-                    if (!data.status) { // 에러 메시지가 아니면 데이터
+                    if(!data.status) {
                         scanData = data;
-                        // UI 업데이트
-                        elFreq.innerText = (data.scanFreq / 100.0).toFixed(1) + ' Hz';
-                        elPoints.innerText = data.amountOfData;
-                        
+                        document.getElementById('val-freq').innerText = (data.scanFreq/100).toFixed(1);
+                        document.getElementById('val-points').innerText = data.amountOfData;
                         draw(data);
                     }
                 }
-            } catch(e) {}
-            // 30~50ms 간격으로 재호출
+            } catch(e){}
             requestAnimationFrame(loop);
         }
 
         function draw(data) {
-            const w = canvas.width;
-            const h = canvas.height;
-            const cx = w / 2;
-            const cy = h / 2;
-
-            // 1. 배경 클리어 (잔상 효과)
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
-            ctx.fillRect(0, 0, w, h);
-
-            // 2. 그리드 그리기
+            const w = canvas.width, h = canvas.height;
+            const cx = w/2, cy = h/2;
+            ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(0,0,w,h);
             drawGridOnly(cx, cy);
-
-            // 3. 점 데이터 그리기
-            ctx.fillStyle = '#00ff00'; // 기본 점 색상
             
-            // 각도 단위 변환 (0.0001도 -> 도)
+            ctx.fillStyle = '#00ff00';
             const startAngle = data.angleBegin / 10000.0;
             const stepAngle = data.angleResol / 10000.0;
-
-            let closestDist = Infinity;
-            let closestPoint = null;
-
-            for (let i = 0; i < data.ranges.length; i++) {
+            
+            for(let i=0; i<data.ranges.length; i++) {
                 const dist = data.ranges[i];
-                if (dist < 0.05) continue; // 노이즈 필터링
-
-                const currentAngleDeg = startAngle + (i * stepAngle);
-                
-                // [핵심] 좌표 변환 로직
-                // 1. (-currentAngleDeg): Lidar의 반시계 방향을 Canvas 시계 방향에 맞게 반전 (좌우 반전 해결)
-                // 2. (+ rotationOffset): 회전 보정 (기본 -90도) 적용
-                const rad = ((-currentAngleDeg) + rotationOffset) * (Math.PI / 180);
-
+                if(dist < 0.05) continue;
+                const angleDeg = startAngle + (i * stepAngle);
+                const rad = ((-angleDeg) - 90) * (Math.PI/180); // -90 for rotation
                 const x = cx + Math.cos(rad) * dist * scale;
                 const y = cy + Math.sin(rad) * dist * scale;
-
-                // 점 찍기
-                ctx.fillRect(x, y, 2, 2);
-
-                // 마우스와 가장 가까운 점 찾기
-                const dx = x - mouseX;
-                const dy = y - mouseY;
-                const d = Math.sqrt(dx*dx + dy*dy);
-
-                if (d < HIT_RADIUS && d < closestDist) {
-                    closestDist = d;
-                    closestPoint = { x, y, dist, angle: currentAngleDeg };
-                }
-            }
-
-            // 4. 하이라이트 및 툴팁 그리기
-            if (closestPoint) {
-                // 하이라이트 원
-                ctx.beginPath();
-                ctx.arc(closestPoint.x, closestPoint.y, 6, 0, Math.PI * 2);
-                ctx.strokeStyle = '#00ffff';
-                ctx.lineWidth = 2;
-                ctx.stroke();
-
-                // 텍스트 정보
-                ctx.font = 'bold 14px monospace';
-                const infoText = \`\${closestPoint.dist.toFixed(3)}m / \${closestPoint.angle.toFixed(1)}°\`;
-                const textWidth = ctx.measureText(infoText).width;
-                
-                // 텍스트 배경 박스
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-                ctx.fillRect(closestPoint.x + 10, closestPoint.y - 35, textWidth + 10, 24);
-                
-                // 텍스트 그리기
-                ctx.fillStyle = '#00ffff';
-                ctx.fillText(infoText, closestPoint.x + 15, closestPoint.y - 19);
-
-                // 사이드바 정보 업데이트
-                elCurDist.innerText = closestPoint.dist.toFixed(3) + ' m';
-                elCurAngle.innerText = closestPoint.angle.toFixed(1) + ' °';
-            } else {
-                elCurDist.innerText = '-';
-                elCurAngle.innerText = '-';
+                ctx.fillRect(x,y,2,2);
             }
         }
 
         function drawGridOnly(cx, cy) {
-            ctx.strokeStyle = '#333';
-            ctx.lineWidth = 1;
-            ctx.fillStyle = '#666';
-            ctx.textAlign = 'center';
-            ctx.font = '12px sans-serif';
-
-            const maxDist = (canvas.width / 2) / scale; 
-            for (let r = 1; r < maxDist; r++) {
-                // 원형 그리드
-                ctx.beginPath();
-                ctx.arc(cx, cy, r * scale, 0, Math.PI * 2);
-                ctx.stroke();
-                // 거리 텍스트
-                ctx.fillText(r + 'm', cx + 5, cy - (r * scale) - 2);
-            }
-
-            // 십자선
-            ctx.beginPath();
-            ctx.moveTo(0, cy); ctx.lineTo(canvas.width, cy);
-            ctx.moveTo(cx, 0); ctx.lineTo(cx, canvas.height);
-            ctx.stroke();
-            
-            // 전방 표시
-            ctx.fillStyle = '#ffcc00';
-            ctx.fillText("FRONT (12h)", cx, 30);
+            ctx.strokeStyle = '#333'; ctx.lineWidth = 1; ctx.beginPath();
+            ctx.arc(cx, cy, 1*scale, 0, Math.PI*2); ctx.stroke();
+            ctx.beginPath(); ctx.arc(cx, cy, 2*scale, 0, Math.PI*2); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(canvas.width, cy); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, canvas.height); ctx.stroke();
         }
-        
-        // 초기 그리드 표시
-        drawGridOnly(canvas.width/2, canvas.height/2);
-
+        drawGridOnly(400,400);
     </script>
 </body>
 </html>
 `;
 
-// 16진수 변환 헬퍼 함수
-// C++: (int) std::round((angle - offset) * 10000) -> Hex
-function toHex(num: number): string {
-    // 32비트 정수형으로 강제 변환 후 16진수화 (음수 처리 포함)
-    return (num >>> 0).toString(16).toUpperCase();
-}
+// --- 초기화 시퀀스 (로그 기반 재구현) ---
+async function runLogBasedInit() {
+    console.log('[Init] Starting Sequence based on Log Analysis...');
 
-// 초기화 모드 설정 (true: 전체 모드, false: 최소 모드)
-const USE_FULL_INITIALIZATION = false;
-
-// 초기화 시퀀스 (모드에 따라 선택 실행)
-async function runHandshake() {
-    if (USE_FULL_INITIALIZATION) {
-        console.log('Starting Full Initialization Sequence...');
-        await runFullHandshake();
-    } else {
-        console.log('Starting Minimal Initialization...');
-        await runMinimalHandshake();
-    }
-}
-
-// 최소 모드: 연결 대기 → 로그인 → 스캔 시작
-async function runMinimalHandshake() {
-    const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-    // 1. 연결 안정화 대기
-    await delay(500);
-
-    // 2. 로그인
-    lidar.sendCommand('SetAccessLevel,0000');
-    await delay(200);
-
-    // 3. 스캔 시작
-    lidar.sendCommand('SensorStart');
-    console.log('Minimal Initialization Completed. Scan Started.');
-}
-
-// 전체 모드: 연결 대기 → 센서 정보 → 로그인 → 설정 읽기 → 설정 쓰기 → 스캔 시작
-async function runFullHandshake() {
-    const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-    // 1. FirstConnectDummySend 대기
-    await delay(500);
-
-    // 2. 센서 정보 획득
     lidar.sendCommand('SensorScanInfo');
-    await delay(200);
+    await delay(100);
 
-    // 3. 로그인
-    lidar.sendCommand('SetAccessLevel,0000');
-    await delay(200);
+    lidar.sendCommand('LSDIConfig');
+    await delay(50);
 
-    // 4. 스캔 설정 읽기
+    lidar.sendCommand('LSDOConfig');
+    await delay(50);
+
+    lidar.sendCommand('LSFConfig');
+    await delay(50);
+
     lidar.sendCommand('LSScanDataConfig');
-    await delay(200);
+    await delay(100);
 
-    // 5. 스캔 설정 쓰기
-    const angleMin = -45.0;
-    const angleMax = 225.0;
-    const angleOffset = 0.0;
+    lidar.sendCommand('LSTeachingConfig');
+    await delay(50);
 
-    const start = Math.round((angleMin - angleOffset) * 10000);
-    const end = Math.round((angleMax - angleOffset) * 10000);
-    
-    const configCmd = `LSScanDataConfig,${toHex(start)},${toHex(end)},1,43,1`;
-    console.log(`Configuring Scan: ${configCmd} (-45deg ~ 225deg)`);
-    lidar.sendCommand(configCmd);
-    await delay(200);
-
-    // 6. 스캔 시작
+    // 로그인 및 스캔 시작 (초기화 마무리)
+    console.log('[Init] Sending Login & Start...');
+    lidar.sendCommand('SetAccessLevel,0000');
+    await delay(100);
     lidar.sendCommand('SensorStart');
-    console.log('Full Initialization Completed. Scan Started.');
+
+    console.log('[Init] Sequence Completed.');
 }
 
-// --- API 라우트 정의 ---
+// --- API 라우트 ---
 
-// 1. 웹 페이지 제공
 fastify.get('/', async (req, reply) => reply.type('text/html').send(indexHtml));
 
-// 2. 연결 요청
 fastify.post<{ Body: { ip: string; port?: number } }>('/connect', async (request, reply) => {
-  const { ip, port } = request.body;
-  try {
-    if (!lidar.isConnected()) {
-        await lidar.connect(ip, port || 8000);
-        
-        // 연결 성공 시 초기화 시퀀스(Handshake) 실행
-        // 비동기로 실행하여 API 응답은 즉시 반환
-        runHandshake().catch(err => {
-            console.error('Handshake failed:', err);
-        });
-    } else {
-        console.log('Already connected.');
+    const { ip, port } = request.body;
+    try {
+        if (!lidar.isConnected()) {
+            await lidar.connect(ip, port || 8000);
+            runLogBasedInit().catch(err => console.error('Init failed:', err));
+        }
+        return { status: 'connected' };
+    } catch (err: any) {
+        return { status: 'error', message: err.message };
     }
-    
-    return { status: 'connected', ip, port: port || 8000 };
-  } catch (err: any) {
-    return { status: 'error', message: err.message };
-  }
 });
 
-// 3. 연결 해제
 fastify.post('/disconnect', async (request, reply) => {
-  if (lidar.isConnected()) {
-      lidar.sendCommand('SensorStop');
-      setTimeout(() => lidar.disconnect(), 100);
-  } else {
-      lidar.disconnect();
-  }
-  return { status: 'disconnected' };
+    if (lidar.isConnected()) {
+        lidar.sendCommand('SensorStop');
+        setTimeout(() => lidar.disconnect(), 100);
+    }
+    return { status: 'disconnected' };
 });
 
-// 4. 스캔 데이터 요청
 fastify.get('/scan', async (request, reply) => {
-  if (!lidar.isConnected()) return { status: 'error', message: 'Not connected' };
-  if (!latestScanData) return { status: 'waiting_for_data' };
-  return latestScanData;
+    if (!lidar.isConnected()) return { status: 'error', message: 'Not connected' };
+    if (!latestScanData) return { status: 'waiting_for_data' };
+    return latestScanData;
 });
 
-// 5. 수동 커맨드 전송
-fastify.post<{ Body: { command: string } }>('/command', async (request, reply) => {
-  try {
-    lidar.sendCommand(request.body.command);
-    return { status: 'sent', command: request.body.command };
-  } catch (err: any) {
-    return { status: 'error', message: err.message };
-  }
+// [핵심 수정] 스캔 설정 API (요청한 시퀀스 적용)
+fastify.post<{ Body: { min: number; max: number } }>('/config/scan', async (request, reply) => {
+    const { min, max } = request.body;
+    if (!lidar.isConnected()) return { status: 'error', message: 'Not connected' };
+
+    try {
+        console.log(`[Config] Sequence Start: Min ${min}° ~ Max ${max}°`);
+
+        // 1. SetAccessLevel (로그인)
+        // 로그 기반: 보통 Command 응답까지 약 50~100ms 소요
+        console.log('1. SetAccessLevel,0000');
+        lidar.sendCommand('SetAccessLevel,0000');
+        await delay(100);
+
+        // 2. LSScanDataConfig (설정 전송)
+        // UI에서 입력받은 Min/Max 값을 16진수로 변환하여 전송
+        // Output Period는 로그 기반값인 '1' 사용
+        const startVal = Math.round(min * 10000);
+        const endVal = Math.round(max * 10000);
+        const configCmd = `LSScanDataConfig,${toHex(startVal)},${toHex(endVal)},1,1,1`;
+
+        console.log(`2. Sending Config: ${configCmd}`);
+        lidar.sendCommand(configCmd);
+        await delay(200); // 설정 쓰기(sWC)는 읽기보다 시간이 더 필요함
+
+        // 3. SensorStop (설정 적용을 위한 정지)
+        console.log('3. SensorStop');
+        lidar.sendCommand('SensorStop');
+        await delay(500); // 정지 후 내부 상태 안정화 대기 (로그의 긴 갭 반영)
+
+        // 4. SensorStart (재시작)
+        console.log('4. SensorStart');
+        lidar.sendCommand('SensorStart');
+
+        return { status: 'success', command: configCmd };
+    } catch (err: any) {
+        console.error(err);
+        return { status: 'error', message: err.message };
+    }
 });
 
-// --- 서버 시작 ---
 const start = async () => {
-  try {
-    await fastify.listen({ port: 3000, host: '0.0.0.0' });
-    console.log('Server running at http://localhost:3000');
-  } catch (err) {
-    fastify.log.error(err);
-    process.exit(1);
-  }
+    try {
+        await fastify.listen({ port: 3000, host: '0.0.0.0' });
+        console.log('Server running at http://localhost:3000');
+    } catch (err) {
+        fastify.log.error(err);
+        process.exit(1);
+    }
 };
 
 start();
