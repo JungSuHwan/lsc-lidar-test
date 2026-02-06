@@ -298,7 +298,7 @@ const indexHtml = `
                 if (dist < 0.05) continue;
 
                 const angleDeg = startAngle + (i * stepAngle);
-                const rad = ((-angleDeg) - 90) * (Math.PI / 180);
+                const rad = ((-angleDeg)) * (Math.PI / 180);
 
                 const x = cx + Math.cos(rad) * dist * scale;
                 const y = cy + Math.sin(rad) * dist * scale;
