@@ -118,6 +118,7 @@ const indexHtml = `
         let scale = 50;
         let selectedSensorId = null;
         let isLooping = false;
+        let currentSensors = [];
 
         function init() {
             isLooping = true;
@@ -190,6 +191,26 @@ const indexHtml = `
             document.querySelectorAll('.sensor-card').forEach(el => el.classList.remove('selected'));
             const card = document.getElementById('card-' + id);
             if(card) card.classList.add('selected');
+
+            // 초기화 (이전 값 잔상 제거)
+            const minElem = document.getElementById('scan-min');
+            const maxElem = document.getElementById('scan-max');
+            minElem.value = '';
+            maxElem.value = '';
+            minElem.placeholder = 'Wait...';
+            maxElem.placeholder = 'Wait...';
+
+            // 데이터가 있으면 업데이트
+            const sensor = currentSensors.find(s => s.id === id);
+            if (sensor && sensor.data) {
+                const min = sensor.data.angleBegin / 10000.0;
+                const resol = sensor.data.angleResol / 10000.0;
+                const count = sensor.data.amountOfData;
+                const max = min + (count - 1) * resol;
+                
+                minElem.value = min.toFixed(1);
+                maxElem.value = max.toFixed(1);
+            }
         }
 
         // --- 메인 루프 ---
@@ -199,6 +220,7 @@ const indexHtml = `
                 const res = await fetch('/scan');
                 if(res.ok) {
                     const data = await res.json(); // { sensors: [...] }
+                    currentSensors = data.sensors;
                     updateDashboard(data.sensors);
                 }
             } catch(e) {}
@@ -298,7 +320,7 @@ const indexHtml = `
                 if (dist < 0.05) continue;
 
                 const angleDeg = startAngle + (i * stepAngle);
-                const rad = ((-angleDeg)) * (Math.PI / 180);
+                const rad = (angleDeg) * (Math.PI / 180);
 
                 const x = cx + Math.cos(rad) * dist * scale;
                 const y = cy + Math.sin(rad) * dist * scale;
