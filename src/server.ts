@@ -115,10 +115,13 @@ const indexHtml = `
 
     <script>
         // 상태 변수
+        // 상태 변수
         let scale = 50;
         let selectedSensorId = null;
         let isLooping = false;
-        let currentSensors = [];
+        
+        // 센서 데이터 캐시 (ID -> SensorData)
+        const latestSensorData = new Map();
 
         function init() {
             isLooping = true;
@@ -155,6 +158,7 @@ const indexHtml = `
             // 선택 초기화
             selectedSensorId = null;
             document.getElementById('cfg-target-id').innerText = 'None';
+            clearConfigInputs();
         }
 
         // --- 설정 적용 ---
@@ -183,6 +187,38 @@ const indexHtml = `
             document.getElementById('scale-val').innerText = scale;
         }
 
+        function clearConfigInputs() {
+            const minElem = document.getElementById('scan-min');
+            const maxElem = document.getElementById('scan-max');
+            minElem.value = '';
+            maxElem.value = '';
+            minElem.placeholder = 'Waiting for data...';
+            maxElem.placeholder = 'Waiting for data...';
+        }
+
+        function updateConfigInputs(data) {
+            if (!data) return;
+            const minElem = document.getElementById('scan-min');
+            const maxElem = document.getElementById('scan-max');
+            
+            // 사용자가 입력 중(포커스 상태)이면 자동 업데이트 하지 않음
+            if (document.activeElement === minElem || document.activeElement === maxElem) {
+                return;
+            }
+
+            // 값이 비어있을 때 채우거나, 아직 사용자가 건드리지 않았다고 판단될 때만 업데이트
+            // (여기서는 빈 값일 때만 채우는 기존 로직 유지하되 포커스 체크 추가)
+            if (minElem.value === '' || maxElem.value === '') {
+                 const min = data.angleBegin / 10000.0;
+                const resol = data.angleResol / 10000.0;
+                const count = data.amountOfData;
+                const max = min + (count - 1) * resol;
+                
+                minElem.value = min.toFixed(1);
+                maxElem.value = max.toFixed(1);
+            }
+        }
+
         function selectSensor(id, ip) {
             selectedSensorId = id;
             document.getElementById('cfg-target-id').innerText = '#' + id + ' (' + ip + ')';
@@ -192,24 +228,12 @@ const indexHtml = `
             const card = document.getElementById('card-' + id);
             if(card) card.classList.add('selected');
 
-            // 초기화 (이전 값 잔상 제거)
-            const minElem = document.getElementById('scan-min');
-            const maxElem = document.getElementById('scan-max');
-            minElem.value = '';
-            maxElem.value = '';
-            minElem.placeholder = 'Wait...';
-            maxElem.placeholder = 'Wait...';
+            // 1. 입력창 초기화
+            clearConfigInputs();
 
-            // 데이터가 있으면 업데이트
-            const sensor = currentSensors.find(s => s.id === id);
-            if (sensor && sensor.data) {
-                const min = sensor.data.angleBegin / 10000.0;
-                const resol = sensor.data.angleResol / 10000.0;
-                const count = sensor.data.amountOfData;
-                const max = min + (count - 1) * resol;
-                
-                minElem.value = min.toFixed(1);
-                maxElem.value = max.toFixed(1);
+            // 2. 이미 받은 데이터가 있다면 즉시 채우기
+            if (latestSensorData.has(id)) {
+                updateConfigInputs(latestSensorData.get(id));
             }
         }
 
@@ -220,8 +244,18 @@ const indexHtml = `
                 const res = await fetch('/scan');
                 if(res.ok) {
                     const data = await res.json(); // { sensors: [...] }
-                    currentSensors = data.sensors;
+                    
+                    // 데이터 최신화
+                    data.sensors.forEach(s => {
+                         if (s.data) latestSensorData.set(s.id, s.data);
+                    });
+
                     updateDashboard(data.sensors);
+
+                    // 현재 선택된 센서라면 입력창도 업데이트 (비어있을 경우)
+                    if (selectedSensorId && latestSensorData.has(selectedSensorId)) {
+                        updateConfigInputs(latestSensorData.get(selectedSensorId));
+                    }
                 }
             } catch(e) {}
             requestAnimationFrame(loop);
