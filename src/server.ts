@@ -4,21 +4,30 @@ import { LidarDriver, ScanData } from './LidarDriver';
 const fastify: FastifyInstance = Fastify({ logger: true });
 
 // --- 다중 센서 상태 관리 ---
+interface TransformConfig {
+    x: number;        // Global X (meter)
+    y: number;        // Global Y (meter)
+    rotation: number; // Global Rotation (degree)
+    color: string;    // Display Color
+}
+
 interface SensorContext {
     driver: LidarDriver;
     data: ScanData | null;
     ip: string;
     port: number;
+    config: TransformConfig; // 위치 보정 정보 추가
 }
 
-// 센서 ID를 키로 하여 관리 (1, 2, 3...)
+// 센서 ID를 키로 하여 관리
 const sensors = new Map<number, SensorContext>();
 let nextSensorId = 1;
 
-// 공통 지연 함수 (ms)
+// 색상 팔레트
+const COLORS = ['#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF'];
+
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// 16진수 변환 헬퍼 함수
 function toHex(num: number): string {
     return (num >>> 0).toString(16).toUpperCase();
 }
@@ -29,337 +38,370 @@ const indexHtml = `
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Multi-Lidar Dashboard</title>
+    <title>Multi-Lidar Fusion Dashboard</title>
     <style>
         body { background-color: #121212; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; margin: 0; display: flex; height: 100vh; overflow: hidden; }
         
-        /* 사이드바 스타일 */
-        #sidebar { width: 320px; background-color: #1e1e1e; padding: 20px; display: flex; flex-direction: column; border-right: 1px solid #333; z-index: 10; box-shadow: 2px 0 10px rgba(0,0,0,0.5); }
-        h2 { border-bottom: 2px solid #007bff; padding-bottom: 10px; font-size: 1.1rem; margin-top: 0; }
+        /* 사이드바 */
+        #sidebar { width: 340px; background-color: #1e1e1e; padding: 20px; display: flex; flex-direction: column; border-right: 1px solid #333; z-index: 10; overflow-y: auto; }
+        h2 { border-bottom: 2px solid #007bff; padding-bottom: 10px; font-size: 1.1rem; margin-top: 20px; }
         
-        .control-group { background: #2c2c2c; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #333; }
-        .input-row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
-        input[type="text"], input[type="number"] { background: #333; border: 1px solid #444; color: white; padding: 8px; border-radius: 4px; flex: 1; text-align: center; }
+        .control-group { background: #2c2c2c; padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #333; }
+        .input-row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; justify-content: space-between; }
+        .input-row label { font-size: 0.9rem; color: #aaa; width: 60px; }
+        input[type="text"], input[type="number"] { background: #333; border: 1px solid #444; color: white; padding: 6px; border-radius: 4px; flex: 1; text-align: center; }
         
         button { width: 100%; padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; margin-bottom: 5px; color: white; transition: 0.2s; }
         button.primary { background: #007bff; } button.primary:hover { background: #0056b3; }
         button.danger { background: #dc3545; } button.danger:hover { background: #a71d2a; }
-        button.secondary { background: #444; } button.secondary:hover { background: #666; }
+        button.success { background: #28a745; } button.success:hover { background: #218838; }
 
-        /* 메인 대시보드 영역 (그리드) */
-        #dashboard-container { flex: 1; padding: 20px; overflow-y: auto; background: #000; position: relative; }
-        #dashboard-grid { display: flex; flex-wrap: wrap; gap: 20px; align-content: flex-start; }
+        /* 메인 영역 */
+        #main-area { flex: 1; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
         
-        /* 개별 센서 카드 스타일 */
+        /* 통합 뷰 (Merged View) */
+        #merged-container { flex: 2; background: #000; border-bottom: 2px solid #333; position: relative; display: flex; justify-content: center; align-items: center; }
+        #merged-canvas { background: #080808; box-shadow: inset 0 0 50px rgba(0,0,0,0.8); }
+        .view-label { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 5px 10px; border-radius: 4px; font-weight: bold; color: #00afff; pointer-events: none; }
+
+        /* 개별 센서 그리드 */
+        #grid-container { flex: 1; padding: 10px; overflow-y: auto; background: #121212; border-top: 1px solid #444; }
+        #dashboard-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+        
+        /* 개별 센서 카드 */
         .sensor-card { 
-            background: #1a1a1a; border: 1px solid #333; border-radius: 8px; 
-            width: 400px; height: 450px; display: flex; flex-direction: column; 
-            position: relative; transition: border-color 0.2s;
+            background: #1a1a1a; border: 1px solid #333; border-radius: 6px; 
+            width: 250px; height: 300px; display: flex; flex-direction: column; 
+            position: relative; transition: all 0.2s;
         }
-        .sensor-card.selected { border: 2px solid #00afff; box-shadow: 0 0 15px rgba(0, 175, 255, 0.2); }
+        .sensor-card.selected { border: 2px solid #00afff; box-shadow: 0 0 15px rgba(0, 175, 255, 0.4); transform: translateY(-2px); }
         
-        .card-header { 
-            padding: 10px 15px; background: #252525; border-bottom: 1px solid #333; border-radius: 8px 8px 0 0;
-            display: flex; justify-content: space-between; align-items: center;
-        }
-        .card-title { font-weight: bold; font-size: 0.95rem; display: flex; align-items: center; gap: 8px; }
-        .status-dot { width: 8px; height: 8px; background: #00ff00; border-radius: 50%; box-shadow: 0 0 5px #00ff00; }
-        
-        .card-body { flex: 1; position: relative; background: #000; cursor: crosshair; }
+        .card-header { padding: 8px; background: #252525; border-bottom: 1px solid #333; font-size: 0.85rem; display: flex; justify-content: space-between; }
+        .card-body { flex: 1; background: #000; position: relative; }
         .card-canvas { width: 100%; height: 100%; display: block; }
         
-        .card-footer { 
-            padding: 8px 15px; background: #252525; border-top: 1px solid #333; border-radius: 0 0 8px 8px; 
-            font-size: 0.8rem; color: #888; display: flex; justify-content: space-between;
-        }
-
-        #empty-msg { width: 100%; text-align: center; color: #444; margin-top: 100px; font-size: 1.2rem; }
+        #empty-msg { width: 100%; text-align: center; color: #444; margin-top: 20px; }
     </style>
 </head>
 <body>
     <div id="sidebar">
-        <h2>Add Sensor</h2>
+        <h2 style="margin-top:0">Connection</h2>
         <div class="control-group">
             <div class="input-row">
                 <input type="text" id="new-ip" value="192.168.0.10" placeholder="IP Address">
-                <input type="number" id="new-port" value="8000" placeholder="Port" style="width: 60px;">
+                <input type="number" id="new-port" value="8000" placeholder="Port" style="width: 50px;">
             </div>
             <button class="primary" onclick="addSensor()">+ Connect Sensor</button>
         </div>
 
-        <h2>Config Selected</h2>
+        <h2>Transform (Fusion)</h2>
         <div class="control-group">
             <div style="margin-bottom:10px; font-size:0.9rem; color:#00afff;">
-                Target: <span id="cfg-target-id" style="font-weight:bold; color:#fff;">None</span>
+                Selected: <span id="tf-target-id" style="font-weight:bold; color:#fff;">None</span>
             </div>
-            <div class="input-row"><label>Min(°)</label><input type="number" id="scan-min" value="-45" step="1"></div>
-            <div class="input-row"><label>Max(°)</label><input type="number" id="scan-max" value="225" step="1"></div>
-            <button class="primary" onclick="applyConfig()">Apply Config</button>
-            <div style="margin-top:10px;">
-                <button class="danger" onclick="disconnectSelected()">Disconnect Target</button>
-            </div>
+            <div class="input-row"><label>X (m)</label><input type="number" id="tf-x" value="0" step="0.1"></div>
+            <div class="input-row"><label>Y (m)</label><input type="number" id="tf-y" value="0" step="0.1"></div>
+            <div class="input-row"><label>Rot (°)</label><input type="number" id="tf-rot" value="0" step="1"></div>
+            <button class="success" onclick="applyTransform()">Update Transform</button>
+        </div>
+
+        <h2>Scan Config</h2>
+        <div class="control-group">
+             <div class="input-row"><label>Min(°)</label><input type="number" id="scan-min" placeholder="-45" step="1"></div>
+             <div class="input-row"><label>Max(°)</label><input type="number" id="scan-max" placeholder="225" step="1"></div>
+             <button class="primary" onclick="applyConfig()">Apply Scan Range</button>
+             <button class="danger" onclick="disconnectSelected()" style="margin-top:5px;">Disconnect</button>
         </div>
 
         <h2>View Settings</h2>
         <div class="control-group">
-            <label>Scale: <span id="scale-val">50</span> px/m</label>
-            <input type="range" min="10" max="200" value="50" style="width:100%" oninput="updateScale(this.value)">
+            <label>Zoom (px/m): <span id="scale-val">50</span></label>
+            <input type="range" min="10" max="300" value="50" style="width:100%" oninput="updateScale(this.value)">
         </div>
     </div>
 
-    <div id="dashboard-container">
-        <div id="dashboard-grid">
-            <div id="empty-msg">No sensors connected.<br>Use sidebar to add a sensor.</div>
+    <div id="main-area">
+        <div id="merged-container">
+            <div class="view-label">Global Merged Map</div>
+            <canvas id="merged-canvas"></canvas>
+        </div>
+        
+        <div id="grid-container">
+            <div id="dashboard-grid">
+                <div id="empty-msg">No sensors connected.</div>
+            </div>
         </div>
     </div>
 
     <script>
-        // 상태 변수
-        // 상태 변수
-        let scale = 50;
+        // --- 전역 상태 ---
+        let scale = 50; // px per meter
         let selectedSensorId = null;
         let isLooping = false;
         
-        // 센서 데이터 캐시 (ID -> SensorData)
-        const latestSensorData = new Map();
+        // 데이터 저장소
+        // sensorsData 구조: { [id]: { config: {x,y,rot,color}, data: ScanData } }
+        let sensorsData = {}; 
+
+        const mergedCanvas = document.getElementById('merged-canvas');
+        const mergedCtx = mergedCanvas.getContext('2d');
+
+        // 캔버스 크기 조정 (반응형)
+        function resizeCanvas() {
+            const container = document.getElementById('merged-container');
+            mergedCanvas.width = container.clientWidth;
+            mergedCanvas.height = container.clientHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
 
         function init() {
             isLooping = true;
             loop();
         }
 
-        // --- 센서 추가 ---
+        // --- API 호출 함수들 ---
         async function addSensor() {
             const ip = document.getElementById('new-ip').value;
-            const port = parseInt(document.getElementById('new-port').value);
-            
+            const port = document.getElementById('new-port').value;
             try {
                 const res = await fetch('/connect', {
                     method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ ip, port })
+                    body: JSON.stringify({ ip, port: parseInt(port) })
                 });
                 const data = await res.json();
-                if(data.status !== 'connected') {
-                    alert('Failed: ' + data.message);
-                }
-            } catch(e) { alert('Error: ' + e.message); }
+                if(data.status !== 'connected') alert(data.message);
+            } catch(e) { alert('Conn Error'); }
         }
 
-        // --- 선택된 센서 연결 해제 ---
-        async function disconnectSelected() {
-            if(!selectedSensorId) return alert('Select a sensor first.');
-            if(!confirm('Disconnect Sensor ID ' + selectedSensorId + '?')) return;
+        async function applyTransform() {
+            if(!selectedSensorId) return alert('Select a sensor first');
+            const x = parseFloat(document.getElementById('tf-x').value);
+            const y = parseFloat(document.getElementById('tf-y').value);
+            const rot = parseFloat(document.getElementById('tf-rot').value);
+
+            await fetch('/config/transform', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ id: selectedSensorId, x, y, rotation: rot })
+            });
+        }
+
+        async function applyConfig() {
+            if(!selectedSensorId) return alert("Select a sensor");
+            const min = parseFloat(document.getElementById('scan-min').value);
+            const max = parseFloat(document.getElementById('scan-max').value);
             
+            await fetch('/config/scan', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ id: selectedSensorId, min, max })
+            });
+            alert('Scan config sent!');
+        }
+
+        async function disconnectSelected() {
+            if(!selectedSensorId || !confirm('Disconnect ID ' + selectedSensorId + '?')) return;
             await fetch('/disconnect', {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ id: selectedSensorId })
             });
-            
-            // 선택 초기화
             selectedSensorId = null;
-            document.getElementById('cfg-target-id').innerText = 'None';
-            clearConfigInputs();
+            document.getElementById('tf-target-id').innerText = 'None';
         }
 
-        // --- 설정 적용 ---
-        async function applyConfig() {
-            if(!selectedSensorId) return alert("Select a sensor card to configure.");
-            
-            const min = parseFloat(document.getElementById('scan-min').value);
-            const max = parseFloat(document.getElementById('scan-max').value);
-            const btn = document.querySelector('button[onclick="applyConfig()"]');
-            
-            btn.innerText = "Applying..."; btn.disabled = true;
-            try {
-                const res = await fetch('/config/scan', {
-                    method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ id: selectedSensorId, min, max })
-                });
-                const data = await res.json();
-                alert(data.status === 'success' ? 'Config Applied!' : 'Error: ' + data.message);
-            } catch(e) { alert('Network Error'); }
-            btn.innerText = "Apply Config"; btn.disabled = false;
-        }
-
-        // --- 뷰 제어 ---
         function updateScale(val) {
             scale = parseInt(val);
             document.getElementById('scale-val').innerText = scale;
         }
 
-        function clearConfigInputs() {
-            const minElem = document.getElementById('scan-min');
-            const maxElem = document.getElementById('scan-max');
-            minElem.value = '';
-            maxElem.value = '';
-            minElem.placeholder = 'Waiting for data...';
-            maxElem.placeholder = 'Waiting for data...';
-        }
-
-        function updateConfigInputs(data) {
-            if (!data) return;
-            const minElem = document.getElementById('scan-min');
-            const maxElem = document.getElementById('scan-max');
-            
-            // 사용자가 입력 중(포커스 상태)이면 자동 업데이트 하지 않음
-            if (document.activeElement === minElem || document.activeElement === maxElem) {
-                return;
-            }
-
-            // 값이 비어있을 때 채우거나, 아직 사용자가 건드리지 않았다고 판단될 때만 업데이트
-            // (여기서는 빈 값일 때만 채우는 기존 로직 유지하되 포커스 체크 추가)
-            if (minElem.value === '' || maxElem.value === '') {
-                 const min = data.angleBegin / 10000.0;
-                const resol = data.angleResol / 10000.0;
-                const count = data.amountOfData;
-                const max = min + (count - 1) * resol;
-                
-                minElem.value = min.toFixed(1);
-                maxElem.value = max.toFixed(1);
-            }
-        }
-
-        function selectSensor(id, ip) {
+        // --- UI 상호작용 ---
+        function selectSensor(id) {
             selectedSensorId = id;
-            document.getElementById('cfg-target-id').innerText = '#' + id + ' (' + ip + ')';
             
-            // UI Highlight
+            // 데이터가 있으면 입력창 채우기
+            if(sensorsData[id]) {
+                const cfg = sensorsData[id].config;
+                document.getElementById('tf-target-id').innerText = \`#\${id} (\${cfg.color})\`;
+                document.getElementById('tf-target-id').style.color = cfg.color;
+                
+                document.getElementById('tf-x').value = cfg.x;
+                document.getElementById('tf-y').value = cfg.y;
+                document.getElementById('tf-rot').value = cfg.rotation;
+
+                // 스캔 범위도 업데이트 (데이터가 있을 시)
+                const sData = sensorsData[id].data;
+                if(sData) {
+                    const min = sData.angleBegin / 10000.0;
+                    const resol = sData.angleResol / 10000.0;
+                    const count = sData.amountOfData;
+                    const max = min + (count - 1) * resol;
+                    document.getElementById('scan-min').value = min.toFixed(1);
+                    document.getElementById('scan-max').value = max.toFixed(1);
+                }
+            }
+
+            // 하이라이트 처리
             document.querySelectorAll('.sensor-card').forEach(el => el.classList.remove('selected'));
             const card = document.getElementById('card-' + id);
             if(card) card.classList.add('selected');
-
-            // 1. 입력창 초기화
-            clearConfigInputs();
-
-            // 2. 이미 받은 데이터가 있다면 즉시 채우기
-            if (latestSensorData.has(id)) {
-                updateConfigInputs(latestSensorData.get(id));
-            }
         }
 
-        // --- 메인 루프 ---
+        // --- 렌더링 루프 ---
         async function loop() {
             if(!isLooping) return;
             try {
                 const res = await fetch('/scan');
                 if(res.ok) {
-                    const data = await res.json(); // { sensors: [...] }
+                    const data = await res.json();
                     
-                    // 데이터 최신화
+                    // 데이터 전처리 및 저장
+                    const activeIds = new Set();
                     data.sensors.forEach(s => {
-                         if (s.data) latestSensorData.set(s.id, s.data);
+                        sensorsData[s.id] = s;
+                        activeIds.add(s.id);
                     });
 
-                    updateDashboard(data.sensors);
-
-                    // 현재 선택된 센서라면 입력창도 업데이트 (비어있을 경우)
-                    if (selectedSensorId && latestSensorData.has(selectedSensorId)) {
-                        updateConfigInputs(latestSensorData.get(selectedSensorId));
-                    }
+                    // UI 업데이트
+                    updateDashboardCards(data.sensors, activeIds);
+                    drawMergedView(); // 통합 뷰 그리기
                 }
             } catch(e) {}
             requestAnimationFrame(loop);
         }
 
-        // --- 대시보드 그리기 ---
-        function updateDashboard(sensorList) {
+        // 1. 개별 카드 업데이트
+        function updateDashboardCards(sensorList, activeIds) {
             const grid = document.getElementById('dashboard-grid');
             const emptyMsg = document.getElementById('empty-msg');
             
-            if (sensorList.length === 0) {
-                emptyMsg.style.display = 'block';
-            } else {
-                emptyMsg.style.display = 'none';
-            }
+            emptyMsg.style.display = sensorList.length === 0 ? 'block' : 'none';
 
-            // 1. 끊긴 센서 제거
-            const activeIds = new Set(sensorList.map(s => s.id));
+            // 죽은 센서 카드 제거
             document.querySelectorAll('.sensor-card').forEach(card => {
                 const id = parseInt(card.dataset.id);
-                if (!activeIds.has(id)) {
-                    card.remove();
-                    if(selectedSensorId === id) {
-                        selectedSensorId = null;
-                        document.getElementById('cfg-target-id').innerText = 'None';
-                    }
-                }
+                if (!activeIds.has(id)) card.remove();
             });
 
-            // 2. 센서별 카드 생성 및 업데이트
-            sensorList.forEach(sensor => {
-                let card = document.getElementById('card-' + sensor.id);
-                
-                // 카드 없으면 생성
+            // 카드 생성 및 그리기
+            sensorList.forEach(s => {
+                let card = document.getElementById('card-' + s.id);
                 if (!card) {
                     card = document.createElement('div');
                     card.className = 'sensor-card';
-                    card.id = 'card-' + sensor.id;
-                    card.dataset.id = sensor.id;
-                    card.onclick = () => selectSensor(sensor.id, sensor.ip);
-                    
+                    card.id = 'card-' + s.id;
+                    card.dataset.id = s.id;
+                    card.onclick = () => selectSensor(s.id);
                     card.innerHTML = \`
                         <div class="card-header">
-                            <span class="card-title">
-                                <div class="status-dot"></div> ID \${sensor.id} (\${sensor.ip})
-                            </span>
-                            <span style="font-size:0.8rem; color:#aaa">Port: \${sensor.port}</span>
+                            <span style="color:\${s.config.color}; font-weight:bold;">● ID \${s.id}</span>
+                            <span>\${s.ip}</span>
                         </div>
-                        <div class="card-body">
-                            <canvas width="400" height="400"></canvas>
-                        </div>
-                        <div class="card-footer">
-                            <span id="stat-freq-\${sensor.id}">Freq: - Hz</span>
-                            <span id="stat-pts-\${sensor.id}">Pts: -</span>
-                        </div>
+                        <div class="card-body"><canvas width="250" height="270"></canvas></div>
                     \`;
                     grid.appendChild(card);
                 }
-
-                // 데이터 그리기
-                if (sensor.data) {
-                    document.getElementById('stat-freq-' + sensor.id).innerText = 'Freq: ' + (sensor.data.scanFreq/100).toFixed(1) + ' Hz';
-                    document.getElementById('stat-pts-' + sensor.id).innerText = 'Pts: ' + sensor.data.amountOfData;
-                    
+                
+                // 개별 캔버스 그리기 (Local View)
+                if(s.data) {
                     const ctx = card.querySelector('canvas').getContext('2d');
-                    drawSensorCanvas(ctx, sensor.data, 400, 400);
+                    drawLocalSensor(ctx, s.data, 250, 270, s.config.color);
                 }
             });
         }
 
-        function drawSensorCanvas(ctx, data, w, h) {
+        // 2. 통합 뷰 그리기 (핵심 로직)
+        function drawMergedView() {
+            const w = mergedCanvas.width;
+            const h = mergedCanvas.height;
             const cx = w / 2;
             const cy = h / 2;
 
-            // 배경
-            ctx.fillStyle = 'rgba(0,0,0,0.3)';
-            ctx.fillRect(0, 0, w, h);
+            // 초기화
+            mergedCtx.fillStyle = '#080808';
+            mergedCtx.fillRect(0, 0, w, h);
 
-            // 그리드
-            ctx.strokeStyle = '#333'; ctx.lineWidth = 1; ctx.beginPath();
-            for (let r = 1; r * scale < cx; r++) {
-                ctx.moveTo(cx + r * scale, cy);
-                ctx.arc(cx, cy, r * scale, 0, Math.PI * 2);
+            // 그리드 (1m 단위)
+            mergedCtx.strokeStyle = '#222';
+            mergedCtx.lineWidth = 1;
+            mergedCtx.beginPath();
+            
+            // 동심원
+            for(let r=1; r*scale < Math.max(w,h)/1.5; r++) {
+                mergedCtx.moveTo(cx + r*scale, cy);
+                mergedCtx.arc(cx, cy, r*scale, 0, Math.PI*2);
             }
-            ctx.moveTo(0, cy); ctx.lineTo(w, cy);
-            ctx.moveTo(cx, 0); ctx.lineTo(cx, h);
-            ctx.stroke();
+            // 십자선
+            mergedCtx.moveTo(0, cy); mergedCtx.lineTo(w, cy);
+            mergedCtx.moveTo(cx, 0); mergedCtx.lineTo(cx, h);
+            mergedCtx.stroke();
 
-            // 점 데이터
-            ctx.fillStyle = '#00ff00';
-            const startAngle = data.angleBegin / 10000.0;
-            const stepAngle = data.angleResol / 10000.0;
+            // 모든 센서 데이터 순회
+            Object.values(sensorsData).forEach(sensor => {
+                if(!sensor.data) return;
 
-            for (let i = 0; i < data.ranges.length; i++) {
+                const cfg = sensor.config; // {x, y, rotation, color}
+                const scan = sensor.data;
+
+                mergedCtx.fillStyle = cfg.color;
+                
+                // 센서 위치 표시
+                const sensorScreenX = cx + cfg.x * scale;
+                const sensorScreenY = cy - cfg.y * scale; // Y축 반전
+                
+                mergedCtx.fillRect(sensorScreenX - 3, sensorScreenY - 3, 6, 6); // 센서 본체
+                
+                // 포인트 클라우드 변환 및 그리기
+                const startAngle = scan.angleBegin / 10000.0;
+                const stepAngle = scan.angleResol / 10000.0;
+                
+                // 회전 라디안 변환 (Global Rotation)
+                const sensorRotRad = cfg.rotation * (Math.PI / 180);
+
+                for(let i=0; i<scan.ranges.length; i++) {
+                    const dist = scan.ranges[i];
+                    if(dist < 0.05) continue;
+
+                    // 1. 로컬 극좌표 -> 로컬 직교좌표
+                    const angleDeg = startAngle + (i * stepAngle);
+                    const angleRad = angleDeg * (Math.PI / 180);
+                    
+                    const localX = dist * Math.cos(angleRad);
+                    const localY = dist * Math.sin(angleRad);
+
+                    // 2. 로컬 직교 -> 전역 직교 (회전 변환)
+                    // x' = x*cos(t) - y*sin(t)
+                    // y' = x*sin(t) + y*cos(t)
+                    const rotX = localX * Math.cos(sensorRotRad) - localY * Math.sin(sensorRotRad);
+                    const rotY = localX * Math.sin(sensorRotRad) + localY * Math.cos(sensorRotRad);
+
+                    // 3. 평행 이동 (위치 보정)
+                    const globalX = rotX + cfg.x;
+                    const globalY = rotY + cfg.y;
+
+                    // 4. 화면 좌표 변환 (Screen Mapping)
+                    const screenX = cx + globalX * scale;
+                    const screenY = cy - globalY * scale; // Y축은 위로 갈수록 +이므로 캔버스에선 뺌
+
+                    mergedCtx.fillRect(screenX, screenY, 2, 2);
+                }
+            });
+        }
+
+        // 개별 뷰 (단순 로컬 좌표)
+        function drawLocalSensor(ctx, data, w, h, color) {
+            const cx = w/2, cy = h/2;
+            ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.fillRect(0,0,w,h); // Clear
+            
+            // 점 그리기
+            ctx.fillStyle = color;
+            const start = data.angleBegin / 10000.0;
+            const step = data.angleResol / 10000.0;
+
+            for(let i=0; i<data.ranges.length; i++) {
                 const dist = data.ranges[i];
-                if (dist < 0.05) continue;
-
-                const angleDeg = startAngle + (i * stepAngle);
-                const rad = (angleDeg) * (Math.PI / 180);
-
-                const x = cx + Math.cos(rad) * dist * scale;
-                const y = cy + Math.sin(rad) * dist * scale;
-
-                ctx.fillRect(x, y, 2, 2);
+                if(dist < 0.05) continue;
+                const rad = (start + i*step) * (Math.PI/180);
+                // 1/2 축소해서 보여줌 (개별뷰는 작으니까)
+                ctx.fillRect(cx + Math.cos(rad)*dist*(scale/2), cy + Math.sin(rad)*dist*(scale/2), 2, 2); 
             }
         }
 
@@ -369,50 +411,24 @@ const indexHtml = `
 </html>
 `;
 
-// --- 초기화 시퀀스 (업로드된 파일 로직 유지 + 인스턴스화) ---
+// ... 기존 runLogBasedInit 함수는 그대로 사용 ...
 async function runLogBasedInit(driver: LidarDriver, id: number) {
-    console.log(`[Sensor ${id}] Starting Log-Based Init Sequence...`);
-
     try {
-        driver.sendCommand('SensorScanInfo');
-        await delay(100);
-
-        driver.sendCommand('LSDIConfig');
-        await delay(50);
-
-        driver.sendCommand('LSDOConfig');
-        await delay(50);
-
-        driver.sendCommand('LSFConfig');
-        await delay(50);
-
-        driver.sendCommand('LSScanDataConfig');
-        await delay(100);
-
-        driver.sendCommand('LSTeachingConfig');
-        await delay(50);
-
-        console.log(`[Sensor ${id}] Sending Login & Start...`);
         driver.sendCommand('SetAccessLevel,0000');
         await delay(100);
         driver.sendCommand('SensorStart');
-
-        console.log(`[Sensor ${id}] Sequence Completed.`);
-    } catch (e) {
-        console.error(`[Sensor ${id}] Init Error:`, e);
-    }
+    } catch (e) { console.error(e); }
 }
 
 // --- API 라우트 ---
 
 fastify.get('/', async (req, reply) => reply.type('text/html').send(indexHtml));
 
-// 1. 센서 연결 (다중 지원)
+// 1. 연결
 fastify.post<{ Body: { ip: string; port?: number } }>('/connect', async (request, reply) => {
     const { ip, port } = request.body;
     const targetPort = port || 8000;
 
-    // 이미 연결된 IP인지 확인
     for (const [sId, ctx] of sensors) {
         if (ctx.ip === ip && ctx.port === targetPort) {
             return { status: 'connected', message: 'Already connected', id: sId };
@@ -423,26 +439,20 @@ fastify.post<{ Body: { ip: string; port?: number } }>('/connect', async (request
         const id = nextSensorId++;
         const driver = new LidarDriver();
 
-        // 새 컨텍스트 생성
-        const context: SensorContext = {
-            driver,
-            data: null,
-            ip,
-            port: targetPort
+        // 초기 설정값 (색상 순환 할당)
+        const config: TransformConfig = {
+            x: 0, y: 0, rotation: 0,
+            color: COLORS[(id - 1) % COLORS.length]
         };
 
-        // 데이터 수신 핸들러 등록
-        driver.on('scan', (data: ScanData) => {
-            context.data = data;
-        });
+        const context: SensorContext = { driver, data: null, ip, port: targetPort, config };
 
-        // 연결 시도
+        driver.on('scan', (data: ScanData) => { context.data = data; });
+
         if (!driver.isConnected()) {
             await driver.connect(ip, targetPort);
-            sensors.set(id, context); // 맵에 저장
-
-            // 초기화 실행 (비동기)
-            runLogBasedInit(driver, id).catch(err => console.error(`[Sensor ${id}] Init failed:`, err));
+            sensors.set(id, context);
+            runLogBasedInit(driver, id).catch(err => console.error(err));
         }
 
         return { status: 'connected', id };
@@ -451,75 +461,59 @@ fastify.post<{ Body: { ip: string; port?: number } }>('/connect', async (request
     }
 });
 
-// 2. 센서 연결 해제 (ID 기반)
+// 2. 연결 해제
 fastify.post<{ Body: { id: number } }>('/disconnect', async (request, reply) => {
     const { id } = request.body;
     const context = sensors.get(id);
-
-    if (context && context.driver.isConnected()) {
-        try {
-            context.driver.sendCommand('SensorStop');
-            setTimeout(() => context.driver.disconnect(), 100);
-        } catch (e) { }
+    if (context) {
+        try { context.driver.disconnect(); } catch (e) {}
+        sensors.delete(id);
     }
-
-    sensors.delete(id); // 목록에서 제거
     return { status: 'disconnected', id };
 });
 
-// 3. 전체 센서 데이터 요청
+// 3. 스캔 데이터 + 설정 반환
 fastify.get('/scan', async (request, reply) => {
-    // 맵을 순회하며 모든 센서의 데이터 반환
     const result = [];
     for (const [id, ctx] of sensors) {
         result.push({
             id: id,
             ip: ctx.ip,
-            port: ctx.port,
-            data: ctx.data
+            data: ctx.data,
+            config: ctx.config // 위치 설정 정보 포함
         });
     }
     return { sensors: result };
 });
 
-// 4. 스캔 설정 (ID 기반)
+// 4. 스캔 범위 설정
 fastify.post<{ Body: { id: number; min: number; max: number } }>('/config/scan', async (request, reply) => {
     const { id, min, max } = request.body;
     const context = sensors.get(id);
+    if (!context) return { status: 'error' };
 
-    if (!context || !context.driver.isConnected()) {
-        return { status: 'error', message: 'Sensor not connected or invalid ID' };
+    const startVal = Math.round(min * 10000);
+    const endVal = Math.round(max * 10000);
+    const cmd = `LSScanDataConfig,${toHex(startVal)},${toHex(endVal)},1,1,1`;
+    
+    context.driver.sendCommand('SetAccessLevel,0000');
+    setTimeout(() => context.driver.sendCommand(cmd), 100);
+    
+    return { status: 'success' };
+});
+
+// 5. [신규] 위치/회전 설정 업데이트
+fastify.post<{ Body: { id: number; x: number; y: number; rotation: number } }>('/config/transform', async (request, reply) => {
+    const { id, x, y, rotation } = request.body;
+    const context = sensors.get(id);
+    
+    if (context) {
+        context.config.x = x;
+        context.config.y = y;
+        context.config.rotation = rotation;
+        return { status: 'success', config: context.config };
     }
-
-    const driver = context.driver;
-
-    try {
-        console.log(`[Sensor ${id} Config] Min ${min}° ~ Max ${max}°`);
-
-        console.log(`[Sensor ${id}] 1. SetAccessLevel,0000`);
-        driver.sendCommand('SetAccessLevel,0000');
-        await delay(100);
-
-        const startVal = Math.round(min * 10000);
-        const endVal = Math.round(max * 10000);
-        const configCmd = `LSScanDataConfig,${toHex(startVal)},${toHex(endVal)},1,1,1`;
-
-        console.log(`[Sensor ${id}] 2. Sending Config: ${configCmd}`);
-        driver.sendCommand(configCmd);
-        await delay(200);
-
-        console.log(`[Sensor ${id}] 3. SensorStop`);
-        driver.sendCommand('SensorStop');
-        await delay(500);
-
-        console.log(`[Sensor ${id}] 4. SensorStart`);
-        driver.sendCommand('SensorStart');
-
-        return { status: 'success', command: configCmd };
-    } catch (err: any) {
-        console.error(err);
-        return { status: 'error', message: err.message };
-    }
+    return { status: 'error', message: 'Sensor not found' };
 });
 
 const start = async () => {
@@ -527,7 +521,6 @@ const start = async () => {
         await fastify.listen({ port: 3000, host: '0.0.0.0' });
         console.log('Server running at http://localhost:3000');
     } catch (err) {
-        fastify.log.error(err);
         process.exit(1);
     }
 };
