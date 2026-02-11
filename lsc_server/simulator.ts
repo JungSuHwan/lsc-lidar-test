@@ -57,9 +57,9 @@ class LidarSimulator {
     
     // 스캔 설정 (기본값)
     private config = {
-        minAngle: -135, // 270도 커버
-        maxAngle: 135,
-        resolution: 0.5
+        minAngle: -45,  // 시작 각도 변경 (-135 -> -45)
+        maxAngle: 225,  // 종료 각도 변경 (135 -> 225)
+        resolution: 0.333 // 분해능 변경 (0.5 -> 0.333)
     };
 
     constructor(pose: SensorPose) {

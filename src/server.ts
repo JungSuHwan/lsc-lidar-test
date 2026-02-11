@@ -115,8 +115,8 @@ const indexHtml = `
 
         <h2>View Settings</h2>
         <div class="control-group">
-            <label>Zoom (px/m): <span id="scale-val">50</span></label>
-            <input type="range" min="10" max="300" value="50" style="width:100%" oninput="updateScale(this.value)">
+            <label>Zoom (px/m): <span id="scale-val">15</span></label>
+            <input type="range" min="5" max="300" value="15" style="width:100%" oninput="updateScale(this.value)">
         </div>
     </div>
 
@@ -135,7 +135,7 @@ const indexHtml = `
 
     <script>
         // --- 전역 상태 ---
-        let scale = 50; // px per meter
+        let scale = 15; // px per meter (25m 반경을 위해 축소)
         let selectedSensorId = null;
         let isLooping = false;
         
