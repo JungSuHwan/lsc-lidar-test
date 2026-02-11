@@ -1,5 +1,5 @@
 import Fastify, { FastifyInstance } from 'fastify';
-import { LidarDriver, ScanData } from './LidarDriver';
+import { ILidarDriver, StandardLidarDriver, ScanData } from './LidarDriver';
 
 const fastify: FastifyInstance = Fastify({ logger: true });
 
@@ -12,7 +12,7 @@ interface TransformConfig {
 }
 
 interface SensorContext {
-    driver: LidarDriver;
+    driver: ILidarDriver;
     data: ScanData | null;
     ip: string;
     port: number;
@@ -27,10 +27,6 @@ let nextSensorId = 1;
 const COLORS = ['#FF8800', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF'];
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-function toHex(num: number): string {
-    return (num >>> 0).toString(16).toUpperCase();
-}
 
 // --- 웹 대시보드 HTML ---
 const indexHtml = `
@@ -474,11 +470,9 @@ const indexHtml = `
 </html>
 `;
 
-async function runLogBasedInit(driver: LidarDriver, id: number) {
+async function runLogBasedInit(driver: ILidarDriver, id: number) {
     try {
-        driver.sendCommand('SetAccessLevel,0000');
-        await delay(100);
-        driver.sendCommand('SensorStart');
+        await driver.initialize();
     } catch (e) { console.error(e); }
 }
 
@@ -493,7 +487,7 @@ fastify.post<{ Body: { ip: string; port?: number } }>('/connect', async (request
     }
     try {
         const id = nextSensorId++;
-        const driver = new LidarDriver();
+        const driver = new StandardLidarDriver();
         const config: TransformConfig = { x: 0, y: 0, rotation: 0, color: COLORS[(id - 1) % COLORS.length] };
         const context: SensorContext = { driver, data: null, ip, port: targetPort, config };
         driver.on('scan', (data: ScanData) => { context.data = data; });
@@ -530,11 +524,7 @@ fastify.post<{ Body: { id: number; min: number; max: number } }>('/config/scan',
     const { id, min, max } = request.body;
     const context = sensors.get(id);
     if (!context) return { status: 'error' };
-    const startVal = Math.round(min * 10000);
-    const endVal = Math.round(max * 10000);
-    const cmd = `LSScanDataConfig,${toHex(startVal)},${toHex(endVal)},1,1,1`;
-    context.driver.sendCommand('SetAccessLevel,0000');
-    setTimeout(() => context.driver.sendCommand(cmd), 100);
+    await context.driver.configureScanRange(min, max);
     return { status: 'success' };
 });
 
