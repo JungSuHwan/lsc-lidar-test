@@ -23,8 +23,8 @@ interface SensorContext {
 const sensors = new Map<number, SensorContext>();
 let nextSensorId = 1;
 
-// 색상 팔레트
-const COLORS = ['#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF'];
+// 색상 팔레트 (빨간색은 임계값 표시용으로 예약)
+const COLORS = ['#FF8800', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF'];
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -38,9 +38,11 @@ const indexHtml = `
 <html>
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
     <title>Multi-Lidar Fusion Dashboard</title>
     <style>
-        body { background-color: #121212; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; margin: 0; display: flex; height: 100vh; overflow: hidden; }
+        * { box-sizing: border-box; }
+        body { background-color: #121212; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; display: flex; height: 100vh; width: 100vw; overflow: hidden; }
         
         /* 사이드바 */
         #sidebar { width: 340px; background-color: #1e1e1e; padding: 20px; display: flex; flex-direction: column; border-right: 1px solid #333; z-index: 10; overflow-y: auto; }
@@ -57,15 +59,15 @@ const indexHtml = `
         button.success { background: #28a745; } button.success:hover { background: #218838; }
 
         /* 메인 영역 */
-        #main-area { flex: 1; display: flex; flex-direction: column; height: 100vh; overflow: hidden; position: relative; }
+        #main-area { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; position: relative; }
         
         /* 통합 뷰 (Merged View) */
-        #merged-container { flex: 2; background: #000; border-bottom: 2px solid #333; position: relative; display: flex; justify-content: center; align-items: center; }
-        #merged-canvas { background: #080808; cursor: crosshair; }
+        #merged-container { flex: 2; background: #000; border-bottom: 2px solid #333; position: relative; display: flex; justify-content: center; align-items: center; min-height: 0; overflow: hidden; }
+        #merged-canvas { background: #080808; cursor: crosshair; display: block; max-width: 100%; max-height: 100%; }
         .view-label { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 5px 10px; border-radius: 4px; font-weight: bold; color: #00afff; pointer-events: none; }
 
         /* 개별 센서 그리드 */
-        #grid-container { flex: 1; padding: 10px; overflow-y: auto; background: #121212; border-top: 1px solid #444; }
+        #grid-container { flex: 1; padding: 10px; overflow-x: hidden; overflow-y: auto; background: #121212; border-top: 1px solid #444; min-height: 0; }
         #dashboard-grid { display: flex; flex-wrap: wrap; gap: 10px; }
         
         /* 개별 센서 카드 */
@@ -165,9 +167,31 @@ const indexHtml = `
 
         function resizeCanvas() {
             const container = document.getElementById('merged-container');
-            mergedCanvas.width = container.clientWidth;
-            mergedCanvas.height = container.clientHeight;
+            const rect = container.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            
+            // 실제 표시 크기
+            const displayWidth = rect.width;
+            const displayHeight = rect.height;
+            
+            // 캔버스 내부 해상도 (고해상도 디스플레이 대응)
+            mergedCanvas.width = displayWidth * dpr;
+            mergedCanvas.height = displayHeight * dpr;
+            
+            // CSS 크기 설정
+            mergedCanvas.style.width = displayWidth + 'px';
+            mergedCanvas.style.height = displayHeight + 'px';
+            
+            // 스케일 조정 (고해상도 대응)
+            mergedCtx.scale(dpr, dpr);
         }
+        
+        // ResizeObserver로 컨테이너 크기 변경 감지 (줌 포함)
+        const resizeObserver = new ResizeObserver(() => {
+            resizeCanvas();
+        });
+        resizeObserver.observe(document.getElementById('merged-container'));
+        
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
 
@@ -192,9 +216,12 @@ const indexHtml = `
         // --- Merged Canvas 마우스 이벤트 ---
         mergedCanvas.addEventListener('mousemove', (e) => {
             const rect = mergedCanvas.getBoundingClientRect();
+            // CSS 표시 크기 기준 좌표 계산
+            const canvasDisplayWidth = rect.width;
+            const canvasDisplayHeight = rect.height;
             // 캔버스 중앙 기준 좌표 (픽셀)
-            const mx = (e.clientX - rect.left) - mergedCanvas.width / 2;
-            const my = mergedCanvas.height / 2 - (e.clientY - rect.top); // Y축 반전
+            const mx = (e.clientX - rect.left) - canvasDisplayWidth / 2;
+            const my = canvasDisplayHeight / 2 - (e.clientY - rect.top); // Y축 반전
             
             // 물리 좌표 (m)
             const realX = mx / scale;
@@ -374,10 +401,15 @@ const indexHtml = `
         }
 
         function drawMergedView() {
-            const w = mergedCanvas.width;
-            const h = mergedCanvas.height;
+            // CSS 표시 크기 사용 (DPR 보정 전)
+            const rect = mergedCanvas.getBoundingClientRect();
+            const w = rect.width;
+            const h = rect.height;
             const cx = w / 2;
             const cy = h / 2;
+            
+            // 캔버스 클리어 (실제 내부 해상도로)
+            mergedCtx.clearRect(0, 0, mergedCanvas.width, mergedCanvas.height);
 
             mergedCtx.fillStyle = '#080808';
             mergedCtx.fillRect(0, 0, w, h);
