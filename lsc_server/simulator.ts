@@ -6,9 +6,9 @@ const ETX = 0x03;
 
 // --- 시뮬레이션 환경 설정 ---
 // 방 크기 (미터)
-const ROOM_SIZE = 10.0; 
+const ROOM_SIZE = 50.0;
 // 움직이는 장애물 속도
-let globalPhase = 0; 
+let globalPhase = 0;
 
 // 센서 배치 설정 (로봇 중심 기준)
 interface SensorPose {
@@ -48,13 +48,13 @@ class LidarSimulator {
     private server: net.Server;
     private sockets: net.Socket[] = [];
     private scanInterval: NodeJS.Timeout | null = null;
-    
+
     // 센서 고유 설정
     private port: number;
     private pose: SensorPose;
 
     private scanCounter = 0;
-    
+
     // 스캔 설정 (기본값)
     private config = {
         minAngle: -45,  // 시작 각도 변경 (-135 -> -45)
@@ -94,7 +94,7 @@ class LidarSimulator {
             this.sockets = this.sockets.filter(s => s !== socket);
             if (this.sockets.length === 0) this.stopScanning();
         });
-        socket.on('error', () => {});
+        socket.on('error', () => { });
     }
 
     private processCommand(socket: net.Socket, packet: Buffer) {
@@ -140,7 +140,7 @@ class LidarSimulator {
 
         this.scanCounter++;
         const ranges: string[] = [];
-        
+
         // 1. 센서의 현재 설정
         const startDeg = this.config.minAngle;
         const endDeg = this.config.maxAngle;
@@ -156,7 +156,7 @@ class LidarSimulator {
         for (let i = 0; i < count; i++) {
             // A. 현재 레이저의 로컬 각도
             const localAngle = startDeg + (i * step);
-            
+
             // B. 전역 각도 (Global Ray Angle) = 센서 설치각도 + 레이저 각도
             // (이 부분이 시뮬레이션의 핵심입니다!)
             const globalRayDeg = this.pose.rotation + localAngle;
@@ -194,20 +194,20 @@ class LidarSimulator {
             const vy = objY - sy;
             // 투영 (Projection)
             const proj = vx * cos + vy * sin;
-            
+
             if (proj > 0 && proj < dist) {
                 // 레이저 선상에서 물체 중심까지의 수직 거리
                 const distToRay = Math.abs(vx * -sin + vy * cos);
                 if (distToRay < objRadius) {
                     // 물체에 맞음!
-                    dist = proj - Math.sqrt(objRadius*objRadius - distToRay*distToRay);
+                    dist = proj - Math.sqrt(objRadius * objRadius - distToRay * distToRay);
                 }
             }
 
             // F. 노이즈 추가 및 저장
             dist += (Math.random() - 0.5) * 0.02; // 2cm 노이즈
             if (dist < 0) dist = 0;
-            
+
             ranges.push(toHex(Math.round(dist * 1000))); // m -> mm
         }
 
