@@ -134,7 +134,7 @@ class LidarSimulator {
         }
     }
 
-    // --- 핵심 로직: 가상 환경 Ray Casting ---
+    // --- 핵심 로직: 환경을 센서 로컬 좌표계로 변환 후 Ray Casting ---
     private broadcastScanData() {
         if (this.sockets.length === 0) return;
 
@@ -147,71 +147,81 @@ class LidarSimulator {
         const step = this.config.resolution;
         const count = Math.floor((endDeg - startDeg) / step) + 1;
 
-        // 2. 가상 장애물 위치 계산 (전역적으로 빙글빙글 도는 물체)
-        const objX = Math.cos(globalPhase) * 3.0; // 반경 3m 원운동
-        const objY = Math.sin(globalPhase) * 3.0;
-        const objRadius = 0.5; // 물체 크기
+        // 2. 환경을 센서 로컬 좌표계로 변환
+        //    (실제 센서처럼 rotation을 모르는 상태에서 Ray Casting)
+        const sx = this.pose.x;
+        const sy = this.pose.y;
+        const rotRad = this.pose.rotation * (Math.PI / 180);
+        const cosR = Math.cos(-rotRad);
+        const sinR = Math.sin(-rotRad);
 
-        // 3. 레이저 발사
+        // 글로벌 좌표 → 센서 로컬 좌표 변환 함수
+        const toLocal = (gx: number, gy: number) => ({
+            x: (gx - sx) * cosR - (gy - sy) * sinR,
+            y: (gx - sx) * sinR + (gy - sy) * cosR
+        });
+
+        // 3. 장애물을 로컬 좌표로 변환
+        const objLocal = toLocal(
+            Math.cos(globalPhase) * 3.0,  // 반경 3m 원운동
+            Math.sin(globalPhase) * 3.0
+        );
+        const objRadius = 0.5;
+
+        // 4. 벽 세그먼트를 로컬 좌표로 변환
+        const wl = ROOM_SIZE / 2;
+        const walls = [
+            { a: toLocal(-wl, wl), b: toLocal(wl, wl) },  // Top
+            { a: toLocal(-wl, -wl), b: toLocal(wl, -wl) },  // Bottom
+            { a: toLocal(-wl, -wl), b: toLocal(-wl, wl) },  // Left
+            { a: toLocal(wl, -wl), b: toLocal(wl, wl) },  // Right
+        ];
+
+        // 5. 레이저 발사 (로컬 각도만 사용, rotation 미적용!)
         for (let i = 0; i < count; i++) {
-            // A. 현재 레이저의 로컬 각도
             const localAngle = startDeg + (i * step);
+            const localRad = localAngle * (Math.PI / 180);
 
-            // B. 전역 각도 (Global Ray Angle) = 센서 설치각도 + 레이저 각도
-            // (이 부분이 시뮬레이션의 핵심입니다!)
-            const globalRayDeg = this.pose.rotation + localAngle;
-            const globalRayRad = globalRayDeg * (Math.PI / 180);
+            let dist = 50.0; // 최대 감지 거리
 
-            // C. 레이저 시작점 (센서의 전역 위치)
-            const sx = this.pose.x;
-            const sy = this.pose.y;
+            const cos = Math.cos(localRad);
+            const sin = Math.sin(localRad);
 
-            // D. Ray Casting: 방 벽과의 교차점 찾기 (Sqaure Room)
-            // 방은 (-5, -5) ~ (5, 5) 범위라고 가정 (10m x 10m)
-            const wallLimit = ROOM_SIZE / 2;
-            let dist = 20.0; // 최대 거리
-
-            const cos = Math.cos(globalRayRad);
-            const sin = Math.sin(globalRayRad);
-
-            // 수직 벽 (X = ±5) 검사
-            if (cos !== 0) {
-                const xTarget = cos > 0 ? wallLimit : -wallLimit;
-                const d = (xTarget - sx) / cos;
-                if (d > 0) dist = Math.min(dist, d);
-            }
-            // 수평 벽 (Y = ±5) 검사
-            if (sin !== 0) {
-                const yTarget = sin > 0 ? wallLimit : -wallLimit;
-                const d = (yTarget - sy) / sin;
-                if (d > 0) dist = Math.min(dist, d);
+            // A. 벽과의 교차 검사 (Ray-Segment Intersection)
+            //    Ray: 원점(0,0) → 방향(cos, sin)
+            //    Segment: A(x1,y1) → B(x2,y2)
+            for (const wall of walls) {
+                const dx = wall.b.x - wall.a.x;
+                const dy = wall.b.y - wall.a.y;
+                const denom = sin * dx - cos * dy;
+                if (Math.abs(denom) < 1e-10) continue; // 평행
+                const t = (wall.a.y * dx - wall.a.x * dy) / denom;
+                const s = (cos * wall.a.y - sin * wall.a.x) / denom;
+                if (t > 0 && s >= 0 && s <= 1) {
+                    dist = Math.min(dist, t);
+                }
             }
 
-            // E. 움직이는 원형 장애물 검사
-            // (간단한 Ray-Circle Intersection 근사치)
-            // 벡터 V = Object - Sensor
-            const vx = objX - sx;
-            const vy = objY - sy;
-            // 투영 (Projection)
+            // B. 장애물과의 교차 검사 (Ray-Circle Intersection)
+            const vx = objLocal.x;
+            const vy = objLocal.y;
             const proj = vx * cos + vy * sin;
 
             if (proj > 0 && proj < dist) {
-                // 레이저 선상에서 물체 중심까지의 수직 거리
                 const distToRay = Math.abs(vx * -sin + vy * cos);
                 if (distToRay < objRadius) {
-                    // 물체에 맞음!
                     dist = proj - Math.sqrt(objRadius * objRadius - distToRay * distToRay);
                 }
             }
 
-            // F. 노이즈 추가 및 저장
+            // C. 노이즈 추가 및 저장
             dist += (Math.random() - 0.5) * 0.02; // 2cm 노이즈
             if (dist < 0) dist = 0;
 
             ranges.push(toHex(Math.round(dist * 1000))); // m -> mm
         }
 
-        // 헤더 생성 및 전송 (기존과 동일)
+        // 헤더 생성 및 전송
         const headerParts = [
             'sSN', 'LidarData', 'SimDevice', 'v1.0', 'OK',
             toHex(this.scanCounter), '00', '00',
