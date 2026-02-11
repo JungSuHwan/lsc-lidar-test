@@ -6,7 +6,7 @@ const ETX = 0x03;
 
 // --- 시뮬레이션 환경 설정 ---
 // 방 크기 (미터)
-const ROOM_SIZE = 50.0;
+const ROOM_SIZE = 20.0;
 // 움직이는 장애물 속도
 let globalPhase = 0;
 
@@ -182,7 +182,7 @@ class LidarSimulator {
             const localAngle = startDeg + (i * step);
             const localRad = localAngle * (Math.PI / 180);
 
-            let dist = 50.0; // 최대 감지 거리
+            let dist = 25.0; // 최대 감지 거리
 
             const cos = Math.cos(localRad);
             const sin = Math.sin(localRad);
