@@ -148,6 +148,9 @@ const indexHtml = `
     <div id="main-area">
         <div id="merged-container">
             <div class="view-label">Global Merged Map</div>
+            <div style="position:absolute; top:10px; right:10px; background:rgba(0,0,0,0.7); padding:5px 10px; border-radius:4px; font-weight:bold; pointer-events:none; font-size:0.85rem; z-index:5;">
+                <span id="fps-display" style="color:#00ff88;">0 FPS</span>
+            </div>
             <canvas id="merged-canvas"></canvas>
         </div>
         
@@ -165,6 +168,10 @@ const indexHtml = `
         let isLooping = false;
         let sensorsData = {}; 
         let threshold = 0; // 임계값 (0이면 OFF)
+        let frameCount = 0;
+        let lastFpsTime = performance.now();
+        let currentFps = 0;
+        const perSensorFps = {}; // { sensorId: { lastScanCounter, frameCount, fps } }
 
         const mergedCanvas = document.getElementById('merged-canvas');
         const mergedCtx = mergedCanvas.getContext('2d');
@@ -350,10 +357,43 @@ const indexHtml = `
                     data.sensors.forEach(s => {
                         newSensorsData[s.id] = s;
                         activeIds.add(s.id);
+
+                        // 센서별 FPS: scanCounter 변화 감지
+                        if (!perSensorFps[s.id]) {
+                            perSensorFps[s.id] = { lastScanCounter: -1, frameCount: 0, fps: 0 };
+                        }
+                        const pf = perSensorFps[s.id];
+                        if (s.data && s.data.scanCounter !== pf.lastScanCounter) {
+                            pf.frameCount++;
+                            pf.lastScanCounter = s.data.scanCounter;
+                        }
+                    });
+                    // 비활성 센서 FPS 데이터 제거
+                    Object.keys(perSensorFps).forEach(k => {
+                        if (!activeIds.has(parseInt(k))) delete perSensorFps[k];
                     });
                     sensorsData = newSensorsData;
                     updateDashboardCards(data.sensors, activeIds);
                     drawMergedView();
+
+                    // 전체 렌더링 FPS + 센서별 FPS 갱신 (1초마다)
+                    frameCount++;
+                    const now = performance.now();
+                    if (now - lastFpsTime >= 1000) {
+                        currentFps = frameCount;
+                        frameCount = 0;
+                        lastFpsTime = now;
+                        document.getElementById('fps-display').innerText = currentFps + ' FPS';
+
+                        // 센서별 FPS 갱신 및 카드에 표시
+                        Object.keys(perSensorFps).forEach(id => {
+                            const pf = perSensorFps[id];
+                            pf.fps = pf.frameCount;
+                            pf.frameCount = 0;
+                            const fpsEl = document.getElementById('sensor-fps-' + id);
+                            if (fpsEl) fpsEl.innerText = pf.fps + ' fps';
+                        });
+                    }
                 }
             } catch(e) {}
             requestAnimationFrame(loop);
@@ -379,6 +419,7 @@ const indexHtml = `
                     card.innerHTML = \`
                         <div class="card-header">
                             <span style="color:\${s.config.color}; font-weight:bold;">● ID \${s.id}</span>
+                            <span id="sensor-fps-\${s.id}" style="color:#00ff88; font-size:0.8rem;">0 fps</span>
                             <span>\${s.ip}</span>
                         </div>
                         <div class="card-body"><canvas width="250" height="270"></canvas></div>
