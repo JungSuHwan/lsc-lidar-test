@@ -345,10 +345,13 @@ const indexHtml = `
                 if(res.ok) {
                     const data = await res.json();
                     const activeIds = new Set();
+                    // 서버 응답 기준으로 sensorsData를 완전히 새로 구성
+                    const newSensorsData = {};
                     data.sensors.forEach(s => {
-                        sensorsData[s.id] = s;
+                        newSensorsData[s.id] = s;
                         activeIds.add(s.id);
                     });
+                    sensorsData = newSensorsData;
                     updateDashboardCards(data.sensors, activeIds);
                     drawMergedView();
                 }
