@@ -134,6 +134,14 @@ const indexHtml = `
         <div class="control-group">
             <label>Zoom (px/m): <span id="scale-val">15</span></label>
             <input type="range" min="5" max="300" value="15" style="width:100%" oninput="updateScale(this.value)">
+            <div style="margin-top:12px; border-top:1px solid #444; padding-top:12px;">
+                <div class="input-row">
+                    <label style="width:auto;">Threshold (m)</label>
+                    <input type="number" id="threshold-val" value="0" min="0" step="0.5" style="width:80px;">
+                </div>
+                <button class="danger" onclick="updateThreshold()" style="margin-top:5px;">Apply Threshold</button>
+                <div id="threshold-status" style="margin-top:5px; font-size:0.8rem; color:#888;">Threshold: OFF</div>
+            </div>
         </div>
     </div>
 
@@ -156,6 +164,7 @@ const indexHtml = `
         let selectedSensorId = null;
         let isLooping = false;
         let sensorsData = {}; 
+        let threshold = 0; // 임계값 (0이면 OFF)
 
         const mergedCanvas = document.getElementById('merged-canvas');
         const mergedCtx = mergedCanvas.getContext('2d');
@@ -288,6 +297,19 @@ const indexHtml = `
         function updateScale(val) {
             scale = parseInt(val);
             document.getElementById('scale-val').innerText = scale;
+        }
+
+        function updateThreshold() {
+            const val = parseFloat(document.getElementById('threshold-val').value);
+            threshold = isNaN(val) || val <= 0 ? 0 : val;
+            const statusEl = document.getElementById('threshold-status');
+            if (threshold > 0) {
+                statusEl.innerText = 'Threshold: ' + threshold.toFixed(1) + 'm (RED highlight)';
+                statusEl.style.color = '#FF4444';
+            } else {
+                statusEl.innerText = 'Threshold: OFF';
+                statusEl.style.color = '#888';
+            }
         }
 
         function selectSensor(id) {
@@ -445,6 +467,13 @@ const indexHtml = `
                     const rotY = localX * Math.sin(sensorRotRad) + localY * Math.cos(sensorRotRad);
                     const globalX = rotX + cfg.x;
                     const globalY = rotY + cfg.y;
+
+                    // 임계값 체크: 센서 기준 거리가 임계값 이내이면 빨간색
+                    if (threshold > 0 && dist <= threshold) {
+                        mergedCtx.fillStyle = '#FF0000';
+                    } else {
+                        mergedCtx.fillStyle = cfg.color;
+                    }
                     mergedCtx.fillRect(cx + globalX * scale, cy - globalY * scale, 2, 2);
                 }
             });
@@ -453,13 +482,18 @@ const indexHtml = `
         function drawLocalSensor(ctx, data, w, h, color) {
             const cx = w/2, cy = h/2;
             ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.fillRect(0,0,w,h);
-            ctx.fillStyle = color;
             const start = data.angleBegin / 10000.0;
             const step = data.angleResol / 10000.0;
             for(let i=0; i<data.ranges.length; i++) {
                 const dist = data.ranges[i];
                 if(dist < 0.05) continue;
                 const rad = (start + i*step) * (Math.PI/180);
+                // 임계값 체크: 거리가 임계값 이내이면 빨간색
+                if (threshold > 0 && dist <= threshold) {
+                    ctx.fillStyle = '#FF0000';
+                } else {
+                    ctx.fillStyle = color;
+                }
                 // 개별 뷰는 공간이 작으므로 scale/2 사용
                 ctx.fillRect(cx + Math.cos(rad)*dist*(scale/2), cy - Math.sin(rad)*dist*(scale/2), 2, 2); 
             }
