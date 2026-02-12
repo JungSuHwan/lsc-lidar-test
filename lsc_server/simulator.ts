@@ -112,7 +112,25 @@ class LidarSimulator {
         }
         else if (command === 'LSScanDataConfig') {
             if (parts[1] === 'sWC') {
-                // 설정 변경 로직 (생략 가능하나 유지)
+                // 클라이언트가 보낸 각도 설정을 실제로 적용
+                // 패킷 구조: ,sWC,LSScanDataConfig,{startAngleHex},{endAngleHex},1,1,1
+                // parts[0] = '' (앞 콤마), parts[1] = 'sWC', parts[2] = 'LSScanDataConfig'
+                // parts[3] = startAngle (hex, 10000배), parts[4] = endAngle (hex, 10000배)
+                if (parts.length >= 5) {
+                    let startAngleRaw = parseInt(parts[3], 16);
+                    let endAngleRaw = parseInt(parts[4], 16);
+
+                    // 부호 있는 32비트 정수 변환 (음수 각도 지원, 예: -45°)
+                    if (startAngleRaw > 0x7FFFFFFF) startAngleRaw -= 0xFFFFFFFF + 1;
+                    if (endAngleRaw > 0x7FFFFFFF) endAngleRaw -= 0xFFFFFFFF + 1;
+
+                    const newMinAngle = startAngleRaw / 10000;
+                    const newMaxAngle = endAngleRaw / 10000;
+
+                    console.log(`[Sim ${this.port}] Scan range updated: ${this.config.minAngle}°~${this.config.maxAngle}° → ${newMinAngle}°~${newMaxAngle}°`);
+                    this.config.minAngle = newMinAngle;
+                    this.config.maxAngle = newMaxAngle;
+                }
             }
             socket.write(createPacket(`sWA,LSScanDataConfig,1`));
         }
