@@ -142,7 +142,7 @@ class LidarSimulator {
     private startScanning() {
         if (this.scanInterval) return;
         // 모든 센서가 동기화된 애니메이션을 위해 전역 변수 사용 권장
-        this.scanInterval = setInterval(() => this.broadcastScanData(), 50);
+        this.scanInterval = setInterval(() => this.broadcastScanData(), 16);
     }
 
     private stopScanning() {
@@ -257,8 +257,8 @@ class LidarSimulator {
 
 // --- 메인 루프 (전역 애니메이션 타이머) ---
 setInterval(() => {
-    globalPhase += 0.05; // 물체를 천천히 회전시킴
-}, 50);
+    globalPhase += 0.017; // 물체를 천천히 회전시킴 (60Hz 보정)
+}, 16);
 
 console.log('--- Multi-Sensor Robot Simulator Starting ---');
 console.log(`Environment: ${ROOM_SIZE}m x ${ROOM_SIZE}m Square Room`);
